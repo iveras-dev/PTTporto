@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head><title>Check Stream</title></head>
+<body>
+<h2>Check WebRTC Stream</h2>
+<button onclick="test()">Test Audio Stream</button>
+<div id="log"></div>
+<script>
+let pc1 = null, pc2 = null;
+let localStream = null;
+
+async function test() {
+    const log = (msg) => {
+        document.getElementById('log').innerHTML += '<div>' + msg + '</div>';
+    };
+    
+    log('Creating local stream...');
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log('Local stream: ' + localStream.getAudioTracks().length + ' audio tracks');
+    
+    log('Creating peer connections...');
+    pc1 = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    pc2 = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    
+    // Add stream to pc1
+    localStream.getTracks().forEach(track => {
+        pc1.addTrack(track, localStream);
+    });
+    log('Added tracks to pc1');
+    
+    // Handle ICE
+    pc1.onicecandidate = e => {
+        if (e.candidate) {
+            pc2.addIceCandidate(e.candidate);
+            log('ICE: pc1 -> pc2');
+        }
+    };
+    pc2.onicecandidate = e => {
+        if (e.candidate) {
+            pc1.addIceCandidate(e.candidate);
+            log('ICE: pc2 -> pc1');
+        }
+    };
+    
+    // Handle remote stream on pc2
+    pc2.ontrack = (event) => {
+        log('🎧 TRACK RECEIVED on pc2!');
+        log('Streams: ' + event.streams.length);
+        if (event.streams[0]) {
+            const audio = document.createElement('audio');
+            audio.srcObject = event.streams[0];
+            audio.controls = true;
+            audio.autoplay = true;
+            document.body.appendChild(audio);
+            log('Audio element created with controls');
+            audio.play().then(() => {
+                log('✅ Audio playing!');
+            }).catch(e => {
+                log('❌ Play error: ' + e.message);
+            });
+        }
+    };
+    
+    // Create offer/answer
+    const offer = await pc1.createOffer();
+    await pc1.setLocalDescription(offer);
+    log('Offer created');
+    
+    await pc2.setRemoteDescription(offer);
+    log('pc2: remote desc set');
+    
+    const answer = await pc2.createAnswer();
+    await pc2.setLocalDescription(answer);
+    log('Answer created');
+    
+    await pc1.setRemoteDescription(answer);
+    log('pc1: remote desc set');
+    log('Waiting for ICE and stream...');
+}
+
+</script>
+</body>
+</html>

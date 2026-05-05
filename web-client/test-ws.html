@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<body>
+<button onclick="testWS()">Test WebSocket</button>
+<div id="status"></div>
+<script>
+async function testWS() {
+    const resp = await fetch('http://localhost:8082/api/v1/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email:'roy@test.com', password:'roy123'})
+    });
+    const data = await resp.json();
+    const ws = new WebSocket('ws://localhost:8082/ws/ptt/1');
+    ws.onopen = () => {
+        document.getElementById('status').innerHTML = 'Connected! Token: ' + data.callsign;
+        ws.send(JSON.stringify({type:'ptt-start', channelId:1, callsign: data.callsign}));
+    };
+    ws.onmessage = (e) => {
+        document.getElementById('status').innerHTML += '<br>Received: ' + e.data;
+    };
+}
+</script>
+</body>
+</html>

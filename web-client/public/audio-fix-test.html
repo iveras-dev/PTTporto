@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Audio Fix Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+        button { padding: 10px 20px; margin: 5px; background: #0e639c; color: white; border: none; cursor: pointer; }
+        button:hover { background: #1177bb; }
+        #log { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background: #252526; 
+            border: 1px solid #3e3e42;
+            max-height: 600px; 
+            overflow-y: auto; 
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .log-entry { margin: 2px 0; padding: 2px 5px; border-bottom: 1px solid #3e3e42; }
+        .success { color: #4ec9b0; }
+        .error { color: #f44747; }
+        .info { color: #569cd6; }
+        .warning { color: #ce9178; }
+        #audio-fix { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background: #2d2d30; 
+            border: 1px solid #3e3e42; 
+        }
+        h2 { color: #569cd6; }
+        .ptt-button { 
+            background: #0e639c; 
+            color: white; 
+            border: none; 
+            border-radius: 50%; 
+            width: 120px; 
+            height: 120px; 
+            font-size: 18px; 
+            cursor: pointer;
+            margin: 10px;
+        }
+        .ptt-button:active { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>🔊 Audio Fix Test</h1>
+    
+    <div>
+        <button onclick="runFullTest('test1@test.com', 'test1', 'test123')">🎤 Start Test 1 (Sender)</button>
+        <button onclick="runFullTest('test2@test.com', 'test2', 'test123')">🎧 Start Test 2 (Receiver)</button>
+        <button onclick="clearLog()">🗑️ Clear Log</button>
+    </div>
+    
+    <div id="audio-fix">
+        <h2>🔊 Audio Fix Section</h2>
+        <p>If you can't hear audio automatically, click this button:</p>
+        <button onclick="enableAudio()">🔊 Enable Audio Playback</button>
+        <div id="audio-status">Audio not enabled yet</div>
+    </div>
+    
+    <div>
+        <button class="ptt-button" onmousedown="startPTT()" onmouseup="stopPTT()">PTT</button>
+    </div>
+    
+    <div id="log"></div>
+
+    <script>
+        let currentUser = null;
+        let ws = null;
+        let peerConnection = null;
+        let localStream = null;
+        let remoteStream = null;
+        let audioEnabled = false;
+        
+        const logEl = document.getElementById('log');
+        
+        function log(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.innerHTML = new Date().toLocaleTimeString() + ': ' + message;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+            console.log('[' + type.toUpperCase() + ']', message);
+        }
+        
+        function clearLog() {
+            logEl.innerHTML = '';
+            log('Log cleared', 'info');
+        }
+        
+        async function runFullTest(email, callsign, password) {
+            log('═════════════════════════════════', 'info');
+            log('Starting FULL test as ' + callsign, 'info');
+            log('═════════════════════════════════', 'info');
+            
+            // Step 1: Login
+            log('[STEP 1] Logging in...', 'info');
+            try {
+                const resp = await fetch('http://localhost:8082/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await resp.json();
+                
+                if (!data.accessToken) {
+                    log('[STEP 1] ❌ Login failed: ' + JSON.stringify(data), 'error');
+                    return;
+                }
+                
+                currentUser = { ...data, email, password, callsign };
+                log('[STEP 1] ✅ Logged in as ' + callsign + ' (ID: ' + data.userId + ')', 'success');
+                
+                connectWebSocket();
+                
+            } catch (e) {
+                log('[STEP 1] ❌ Login error: ' + e.message, 'error');
+            }
+        }
+        
+        function connectWebSocket() {
+            log('[STEP 2] Connecting WebSocket...', 'info');
+            
+            if (ws) ws.close();
+            
+            const wsUrl = 'ws://localhost:8082/ws/ptt/1?token=' + encodeURIComponent(currentUser.accessToken);
+            log('[STEP 2] WebSocket URL: ' + wsUrl.substring(0, 80) + '...', 'info');
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                log('[STEP 2] ✅ WebSocket connected!', 'success');
+            };
+            
+            ws.onmessage = async (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    log('[MSG] Received: type=' + msg.type + ', from=' + (msg.callsign || 'server'), 'info');
+                    
+                    if (msg.type === 'offer' && msg.userId !== currentUser.userId) {
+                        log('[WEBRTC] Received OFFER from ' + msg.callsign, 'warning');
+                        await handleOffer(msg.userId, msg.callsign, msg.payload);
+                    }
+                    
+                    if (msg.type === 'answer' && msg.userId !== currentUser.userId) {
+                        log('[WEBRTC] Received ANSWER from ' + msg.callsign, 'warning');
+                        await handleAnswer(msg.payload);
+                    }
+                    
+                    if (msg.type === 'ice-candidate' && msg.userId !== currentUser.userId) {
+                        log('[WEBRTC] Received ICE candidate from ' + msg.callsign, 'info');
+                        await handleIceCandidate(msg.payload);
+                    }
+                    
+                    if (msg.type === 'ptt-start' && msg.callsign !== currentUser.callsign) {
+                        log('[PTT] 🔊 ' + msg.callsign + ' started PTT!', 'success');
+                    }
+                    
+                } catch (e) {
+                    log('[MSG] Non-JSON message: ' + event.data.substring(0, 100), 'warning');
+                }
+            };
+            
+            ws.onclose = () => {
+                log('[STEP 2] ❌ WebSocket disconnected', 'error');
+            };
+            
+            ws.onerror = (error) => {
+                log('[STEP 2] ❌ WebSocket error', 'error');
+            };
+        }
+        
+        async function handleOffer(fromUserId, fromCallsign, offer) {
+            log('[WEBRTC] Creating peer connection for ' + fromCallsign + '...', 'info');
+            
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            };
+            
+            peerConnection = new RTCPeerConnection(configuration);
+            log('[WEBRTC] ✅ PeerConnection created', 'success');
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log('[WEBRTC] Sending ICE candidate to ' + fromCallsign, 'info');
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        userId: currentUser.userId,
+                        callsign: currentUser.callsign,
+                        payload: event.candidate
+                    }));
+                }
+            };
+            
+            peerConnection.ontrack = (event) => {
+                log('[WEBRTC] 🎧 TRACK RECEIVED!', 'success');
+                log('[WEBRTC] Streams: ' + event.streams.length, 'info');
+                
+                if (event.streams[0]) {
+                    remoteStream = event.streams[0];
+                    log('[WEBRTC] Stream has ' + remoteStream.getTracks().length + ' tracks', 'info');
+                    
+                    remoteStream.getTracks().forEach((track, i) => {
+                        log('[WEBRTC] Track ' + i + ': kind=' + track.kind + ', enabled=' + track.enabled, 'info');
+                    });
+                    
+                    // FIX: Create audio element and wait for user to enable
+                    let audioEl = document.getElementById('remote-audio');
+                    if (!audioEl) {
+                        audioEl = document.createElement('audio');
+                        audioEl.id = 'remote-audio';
+                        audioEl.controls = true;
+                        document.body.appendChild(audioEl);
+                        log('[WEBRTC] ✅ Audio element created with controls', 'success');
+                    }
+                    
+                    audioEl.srcObject = remoteStream;
+                    log('[WEBRTC] Set srcObject to remote stream', 'info');
+                    
+                    // TRY to play (may fail without user gesture)
+                    audioEl.play().then(() => {
+                        log('[WEBRTC] ✅ Audio PLAYING!', 'success');
+                        document.getElementById('audio-status').innerHTML = '✅ Audio playing automatically!';
+                    }).catch(e => {
+                        log('[WEBRTC] ❌ Audio play error: ' + e.message, 'error');
+                        log('[WEBRTC] 👉 USER ACTION REQUIRED: Click "🔊 Enable Audio Playback" button', 'warning');
+                        document.getElementById('audio-status').innerHTML = '❌ Click "🔊 Enable Audio Playback" button above!';
+                    });
+                } else {
+                    log('[WEBRTC] ❌ No stream in ontrack event!', 'error');
+                }
+            };
+            
+            log('[WEBRTC] Setting remote description from offer...', 'info');
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            log('[WEBRTC] ✅ Remote description set', 'success');
+            
+            log('[WEBRTC] Creating answer...', 'info');
+            const answer = await peerConnection.createAnswer();
+            log('[WEBRTC] Answer created, setting local description...', 'info');
+            await peerConnection.setLocalDescription(answer);
+            log('[WEBRTC] ✅ Local description set', 'success');
+            
+            ws.send(JSON.stringify({
+                type: 'answer',
+                userId: fromUserId,
+                callsign: currentUser.callsign,
+                payload: answer
+            }));
+            log('[WEBRTC] ✅ Answer sent to ' + fromCallsign, 'success');
+        }
+        
+        async function handleAnswer(answer) {
+            if (peerConnection) {
+                log('[WEBRTC] Setting remote description from answer...', 'info');
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                log('[WEBRTC] ✅ Remote description set from answer', 'success');
+            }
+        }
+        
+        async function handleIceCandidate(candidate) {
+            if (peerConnection) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                log('[WEBRTC] ✅ ICE candidate added', 'success');
+            }
+        }
+        
+        async function startPTT() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('[PTT] ❌ Not connected! Login first.', 'error');
+                return;
+            }
+            
+            if (!currentUser) {
+                log('[PTT] ❌ Not logged in!', 'error');
+                return;
+            }
+            
+            log('[PTT] 🔊 Starting PTT...', 'info');
+            
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('[PTT] ✅ Microphone access granted', 'success');
+                log('[PTT] Local stream has ' + localStream.getTracks().length + ' tracks', 'info');
+            } catch (e) {
+                log('[PTT] ❌ Microphone error: ' + e.message, 'error');
+                return;
+            }
+            
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            };
+            
+            peerConnection = new RTCPeerConnection(configuration);
+            log('[WEBRTC] ✅ Sender PeerConnection created', 'success');
+            
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+                log('[WEBRTC] Added track: ' + track.kind, 'info');
+            });
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    log('[WEBRTC] Sending ICE candidate...', 'info');
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        userId: currentUser.userId,
+                        callsign: currentUser.callsign,
+                        payload: event.candidate
+                    }));
+                }
+            };
+            
+            log('[WEBRTC] Creating OFFER...', 'info');
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            log('[WEBRTC] ✅ Offer created and local description set', 'success');
+            
+            ws.send(JSON.stringify({
+                type: 'offer',
+                userId: currentUser.userId,
+                callsign: currentUser.callsign,
+                payload: offer
+            }));
+            
+            ws.send(JSON.stringify({ type: 'ptt-start', channelId: 1, callsign: currentUser.callsign }));
+            log('[PTT] ✅ PTT Started - Broadcasting audio...', 'success');
+        }
+        
+        function stopPTT() {
+            if (!ws) return;
+            
+            ws.send(JSON.stringify({ type: 'ptt-stop', channelId: 1, callsign: currentUser.callsign }));
+            log('[PTT] 🔇 PTT Stopped', 'info');
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+                log('[PTT] ✅ Local stream stopped', 'success');
+            }
+            
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+                log('[WEBRTC] ✅ PeerConnection closed', 'success');
+            }
+        }
+        
+        function enableAudio() {
+            const audioEl = document.getElementById('remote-audio');
+            if (audioEl) {
+                audioEl.play().then(() => {
+                    log('[AUDIO FIX] ✅ Audio enabled and playing!', 'success');
+                    audioEnabled = true;
+                    document.getElementById('audio-status').innerHTML = '✅ Audio playing!';
+                }).catch(e => {
+                    log('[AUDIO FIX] ❌ Still cannot play: ' + e.message, 'error');
+                });
+            } else {
+                log('[AUDIO FIX] ❌ No audio element found. Wait for a call first.', 'error');
+            }
+        }
+        
+        window.startPTT = startPTT;
+        window.stopPTT = stopPTT;
+        window.enableAudio = enableAudio;
+    </script>
+</body>
+</html>

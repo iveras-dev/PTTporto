@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Audio Test</title>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        button { padding: 15px 30px; margin: 10px; font-size: 16px; }
+        #status { margin-top: 20px; padding: 10px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>Simple Audio Test</h1>
+    
+    <button onclick="testMicrophone()">1. Test Microphone</button>
+    <button onclick="testAudioPlayback()">2. Test Audio Playback</button>
+    <button onclick="testWebRTC()">3. Test WebRTC</button>
+    
+    <div id="status">Click buttons above to test...</div>
+    <audio id="audio1" controls></audio>
+    <audio id="audio2" controls></audio>
+    
+    <script>
+        let localStream = null;
+        let pc1 = null, pc2 = null;
+        const status = document.getElementById('status');
+        
+        function log(msg) {
+            status.innerHTML += '<br>' + new Date().toLocaleTimeString() + ': ' + msg;
+        }
+        
+        async function testMicrophone() {
+            log('Testing microphone...');
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('✅ Microphone works! Got ' + localStream.getAudioTracks().length + ' audio tracks');
+                document.getElementById('audio1').srcObject = localStream;
+                log('Audio element 1 now playing your microphone. Do you hear yourself?');
+            } catch(e) {
+                log('❌ Microphone error: ' + e.message);
+            }
+        }
+        
+        function testAudioPlayback() {
+            log('Testing audio playback with oscillator...');
+            const ctx = new AudioContext();
+            const oscillator = ctx.createOscillator();
+            const gain = ctx.createGain();
+            gain.gain.value = 0.1;
+            oscillator.connect(gain);
+            gain.connect(ctx.destination);
+            oscillator.start();
+            log('Playing test tone... Do you hear it?');
+            
+            setTimeout(() => {
+                oscillator.stop();
+                ctx.close();
+                log('Test tone stopped');
+            }, 2000);
+        }
+        
+        async function testWebRTC() {
+            log('Testing WebRTC connection...');
+            
+            pc1 = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+            pc2 = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+            
+            // Add local stream to pc1
+            localStream.getTracks().forEach(track => {
+                pc1.addTrack(track, localStream);
+            });
+            log('Added tracks to pc1');
+            
+            // Handle ICE
+            pc1.onicecandidate = e => {
+                if (e.candidate) {
+                    pc2.addIceCandidate(e.candidate);
+                    log('ICE: pc1 -> pc2');
+                }
+            };
+            pc2.onicecandidate = e => {
+                if (e.candidate) {
+                    pc1.addIceCandidate(e.candidate);
+                    log('ICE: pc2 -> pc1');
+                }
+            };
+            
+            // Handle incoming stream on pc2
+            pc2.ontrack = (event) => {
+                log('🎧 TRACK RECEIVED on pc2!');
+                document.getElementById('audio2').srcObject = event.streams[0];
+                log('Audio element 2 now has remote stream. Do you hear it?');
+            };
+            
+            // Create offer/answer
+            const offer = await pc1.createOffer();
+            await pc1.setLocalDescription(offer);
+            log('Offer created');
+            
+            await pc2.setRemoteDescription(offer);
+            log('pc2: remote desc set');
+            
+            const answer = await pc2.createAnswer();
+            await pc2.setLocalDescription(answer);
+            log('Answer created');
+            
+            await pc1.setRemoteDescription(answer);
+            log('pc1: remote desc set');
+            log('Waiting for ICE and stream...');
+        }
+    </script>
+</body>
+</html>

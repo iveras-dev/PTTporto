@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>✅ WORKING PTT Audio - Final Fix</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+        button { padding: 15px 30px; margin: 10px; font-size: 16px; cursor: pointer; border: none; border-radius: 5px; }
+        .primary { background: #0e639c; color: white; }
+        .primary:hover { background: #1177bb; }
+        .success { background: #4ec9b0; color: black; }
+        .danger { background: #f44747; color: white; }
+        .warning { background: #ce9178; color: black; }
+        #status { margin-top: 20px; padding: 15px; background: #252526; border: 1px solid #3e3e42; max-height: 500px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.5; }
+        .log-entry { margin: 2px 0; padding: 2px 5px; border-bottom: 1px solid #3e3e42; }
+        .success-text { color: #4ec9b0; }
+        .error-text { color: #f44747; }
+        .info-text { color: #569cd6; }
+        .warning-text { color: #ce9178; }
+        #audio-section { margin: 20px 0; padding: 15px; background: #2d2d30; border: 1px solid #3e3e42; }
+        h1 { color: #569cd6; }
+        h2 { color: #4ec9b0; margin-top: 30px; }
+        .ptt-button { 
+            background: #0e639c; 
+            color: white; 
+            border: none; 
+            border-radius: 50%; 
+            width: 140px; 
+            height: 140px; 
+            font-size: 22px; 
+            cursor: pointer;
+            margin: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        .ptt-button:active { background: #dc3545; transform: scale(0.95); }
+        .user-section { margin: 20px 0; padding: 15px; background: #252526; border: 1px solid #3e3e42; }
+    </style>
+</head>
+<body>
+    <h1>✅ PTT WebRTC Audio - Final Working Version</h1>
+    
+    <div class="user-section">
+        <h2>Step 1: Login (Do this in 2 tabs)</h2>
+        <button class="primary" onclick="login('test1@test.com', 'test123', 'Test1')">Login as Test1 (Sender)</button>
+        <button class="primary" onclick="login('test2@test.com', 'test123', 'Test2')">Login as Test2 (Receiver)</button>
+    </div>
+    
+    <div id="audio-section">
+        <h2>Step 2: Enable Audio (REQUIRED - Click this first!)</h2>
+        <p style="color: #f44747; font-weight: bold;">⚠️ You MUST click this button before audio will work!</p>
+        <button class="success" onclick="enableAudio()" style="font-size: 18px; padding: 20px 40px;">
+            🔊 CLICK HERE TO ENABLE AUDIO (REQUIRED)
+        </button>
+        <div id="audio-status" style="margin-top: 10px; font-size: 14px;">❌ Audio NOT enabled yet - CLICK THE BUTTON ABOVE!</div>
+    </div>
+    
+    <div class="user-section">
+        <h2>Step 3: PTT Test</h2>
+        <p>Hold the button to talk. Release to stop.</p>
+        <button class="ptt-button" 
+                onmousedown="startPTT()" 
+                onmouseup="stopPTT()" 
+                ontouchstart="startPTT()" 
+                ontouchend="stopPTT()">
+            PTT
+        </button>
+    </div>
+    
+    <div id="status">
+        <div class="log-entry info-text">Ready. Follow steps above.</div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let ws = null;
+        let peerConnection = null;
+        let localStream = null;
+        let remoteStream = null;
+        let audioEnabled = false;
+        let peerConnections = {};
+        
+        const logEl = document.getElementById('status');
+        
+        function log(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type + '-text';
+            entry.innerHTML = new Date().toLocaleTimeString() + ': ' + message;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+            console.log('[' + type.toUpperCase() + ']', message);
+        }
+        
+        async function login(email, password, callsign) {
+            log('═════════════════════════════', 'info');
+            log('Logging in as ' + callsign + '...', 'info');
+            log('═════════════════════════════', 'info');
+            
+            try {
+                const resp = await fetch('http://localhost:8082/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await resp.json();
+                
+                if (!data.accessToken) {
+                    log('❌ Login failed: ' + JSON.stringify(data), 'error');
+                    return;
+                }
+                
+                currentUser = { ...data, email, password, callsign };
+                log('✅ Logged in as ' + callsign + ' (ID: ' + data.userId + ')', 'success');
+                
+                connectWebSocket();
+                
+            } catch (e) {
+                log('❌ Login error: ' + e.message, 'error');
+            }
+        }
+        
+        function connectWebSocket() {
+            log('Connecting WebSocket...', 'info');
+            
+            if (ws) ws.close();
+            
+            const wsUrl = 'ws://localhost:8082/ws/ptt/1?token=' + encodeURIComponent(currentUser.accessToken);
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                log('✅ WebSocket connected!', 'success');
+                log('Ready! Now enable audio (Step 2) and use PTT button.', 'info');
+            };
+            
+            ws.onmessage = async (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    
+                    if (msg.type === 'offer' && msg.userId !== currentUser.userId) {
+                        log('📩 Received OFFER from ' + msg.callsign, 'warning');
+                        await handleOffer(msg.userId, msg.callsign, msg.payload);
+                    }
+                    
+                    if (msg.type === 'answer' && msg.userId !== currentUser.userId) {
+                        log('✅ Received ANSWER from ' + msg.callsign, 'success');
+                        await handleAnswer(msg.payload);
+                    }
+                    
+                    if (msg.type === 'ice-candidate' && msg.userId !== currentUser.userId) {
+                        log('🧊 Received ICE candidate from ' + msg.callsign, 'info');
+                        await handleIceCandidate(msg.payload);
+                    }
+                    
+                    if (msg.type === 'ptt-start' && msg.callsign !== currentUser.callsign) {
+                        log('🔊 ' + msg.callsign + ' started PTT!', 'success');
+                    }
+                    
+                } catch (e) {
+                    log('Non-JSON: ' + event.data.substring(0, 100), 'warning');
+                }
+            };
+            
+            ws.onclose = () => {
+                log('❌ WebSocket disconnected', 'error');
+            };
+        }
+        
+        async function handleOffer(fromUserId, fromCallsign, offer) {
+            log('Creating peer connection for ' + fromCallsign + '...', 'info');
+            
+            const configuration = {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+            };
+            
+            peerConnection = new RTCPeerConnection(configuration);
+            peerConnections[fromUserId] = peerConnection;
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        userId: currentUser.userId,
+                        callsign: currentUser.callsign,
+                        payload: event.candidate
+                    }));
+                }
+            };
+            
+            peerConnection.ontrack = (event) => {
+                log('🎧 TRACK RECEIVED from ' + fromCallsign + '!', 'success');
+                
+                if (event.streams[0]) {
+                    remoteStream = event.streams[0];
+                    log('Stream has ' + remoteStream.getTracks().length + ' tracks', 'info');
+                    
+                    // Create audio element
+                    let audioEl = document.getElementById('remote-audio');
+                    if (!audioEl) {
+                        audioEl = document.createElement('audio');
+                        audioEl.id = 'remote-audio';
+                        audioEl.controls = true;
+                        audioEl.autoplay = true;
+                        document.body.appendChild(audioEl);
+                        log('✅ Audio element created', 'success');
+                    }
+                    
+                    audioEl.srcObject = remoteStream;
+                    log('Set srcObject to remote stream', 'info');
+                    
+                    // Try to play
+                    if (audioEnabled) {
+                        audioEl.play().then(() => {
+                            log('✅ ✅ ✅ AUDIO PLAYING! YOU SHOULD HEAR IT NOW!', 'success');
+                        }).catch(e => {
+                            log('❌ Play error: ' + e.message, 'error');
+                        });
+                    } else {
+                        log('⚠️ Audio NOT enabled yet! CLICK "ENABLE AUDIO" BUTTON!', 'warning');
+                    }
+                }
+            };
+            
+            log('Setting remote description from offer...', 'info');
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            log('✅ Remote description set', 'success');
+            
+            log('Creating answer...', 'info');
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            log('✅ Answer created', 'success');
+            
+            ws.send(JSON.stringify({
+                type: 'answer',
+                userId: fromUserId,
+                callsign: currentUser.callsign,
+                payload: answer
+            }));
+            log('✅ Answer sent to ' + fromCallsign, 'success');
+        }
+        
+        async function handleAnswer(answer) {
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                log('✅ Remote description set from answer', 'success');
+            }
+        }
+        
+        async function handleIceCandidate(candidate) {
+            if (peerConnection) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        }
+        
+        window.startPTT = async () => {
+            if (!currentUser || !ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ Not ready! Login first.', 'error');
+                return;
+            }
+            
+            log('🔊 Starting PTT...', 'info');
+            
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('✅ Microphone access granted', 'success');
+            } catch (e) {
+                log('❌ Microphone error: ' + e.message, 'error');
+                return;
+            }
+            
+            const configuration = {
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            };
+            
+            peerConnection = new RTCPeerConnection(configuration);
+            
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+                log('Added track: ' + track.kind, 'info');
+            });
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        userId: currentUser.userId,
+                        callsign: currentUser.callsign,
+                        payload: event.candidate
+                    }));
+                }
+            };
+            
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            log('✅ Offer created and sent', 'success');
+            
+            ws.send(JSON.stringify({
+                type: 'offer',
+                userId: currentUser.userId,
+                callsign: currentUser.callsign,
+                payload: offer
+            }));
+            
+            ws.send(JSON.stringify({ type: 'ptt-start', channelId: 1, callsign: currentUser.callsign }));
+            log('🔊 PTT Started - Broadcasting audio...', 'success');
+        };
+        
+        window.stopPTT = () => {
+            log('🔇 Stopping PTT...', 'info');
+            
+            ws.send(JSON.stringify({ type: 'ptt-stop', channelId: 1, callsign: currentUser.callsign }));
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+                log('✅ Local stream stopped', 'success');
+            }
+            
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+                log('✅ PeerConnection closed', 'success');
+            }
+        };
+        
+        window.enableAudio = () => {
+            audioEnabled = true;
+            document.getElementById('audio-status').innerHTML = '✅ Audio ENABLED! You should hear audio now!';
+            document.getElementById('audio-status').style.color = '#4ec9b0';
+            log('✅ Audio ENABLED! Now you can hear audio.', 'success');
+            
+            // If there's already a remote stream, play it now
+            const audioEl = document.getElementById('remote-audio');
+            if (audioEl && remoteStream) {
+                audioEl.play().then(() => {
+                    log('✅ ✅ ✅ NOW PLAYING AUDIO!', 'success');
+                }).catch(e => {
+                    log('❌ Still cannot play: ' + e.message, 'error');
+                });
+            }
+        };
+    </script>
+</body>
+</html>
