@@ -33,6 +33,7 @@ dependencies {
     implementation("com.auth0:java-jwt:4.4.0")
     implementation("com.zaxxer:HikariCP:5.1.0")
     implementation("org.json:json:20240205")
+    implementation("ch.qos.logback:logback-classic:1.4.14")
     testImplementation("io.ktor:ktor-server-tests:2.3.12")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.22")
 }

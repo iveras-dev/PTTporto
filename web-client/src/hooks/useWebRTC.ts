@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { WebSocketMessage, PeerConnectionState } from '../types/ptt';
 
 interface UseWebRTCOptions {
@@ -34,6 +34,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
         sendWebSocket({
           type: 'ice-candidate',
           userId: currentUser.userId,
+          targetUserId: remoteUserId, // This is FOR the remote user
           callsign: currentUser.callsign,
           payload: event.candidate
         });
@@ -97,7 +98,8 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
       if (currentUser) {
         sendWebSocket({
           type: 'answer',
-          userId: fromUserId,
+          userId: currentUser.userId, // Who is sending this answer (us)
+          targetUserId: fromUserId, // Who this answer is FOR (the offerer)
           callsign: currentUser.callsign,
           payload: answer
         });
@@ -150,7 +152,8 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
       if (currentUser) {
         sendWebSocket({
           type: 'offer',
-          userId: targetUserId,
+          userId: currentUser.userId, // Who is sending this offer (us)
+          targetUserId: targetUserId, // Who this offer is FOR
           callsign: currentUser.callsign,
           payload: offer
         });
@@ -163,8 +166,8 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   const enableAudio = () => {
     setAudioEnabled(true);
     // Enable all existing audio elements
-    peerConnections.forEach((peer, userId) => {
-      const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
+     peerConnections.forEach((_, userId) => {
+       const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
       if (audioEl) {
         audioEl.play().catch(e => console.error('Play error:', e));
       }
@@ -172,10 +175,10 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   };
   
   const closeAllConnections = () => {
-    peerConnections.forEach((peer) => {
+    peerConnections.forEach((peer, userId) => {
       peer.connection.close();
       // Remove audio element
-      const audioEl = document.getElementById(`audio-${peer.userId}`);
+      const audioEl = document.getElementById(`audio-${userId}`);
       if (audioEl) audioEl.remove();
     });
     peerConnections.clear();

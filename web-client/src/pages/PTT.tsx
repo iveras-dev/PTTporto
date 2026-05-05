@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useWebSocket } from '../hooks/useWebSocket';
 import { useWebRTC } from '../hooks/useWebRTC';
 import { useAudio } from '../hooks/useAudio';
 import { WebSocketMessage } from '../types/ptt';
@@ -29,9 +28,10 @@ const PTT: React.FC = () => {
     error: null
   });
   
-  const { localStream, initializeAudio, startRecording, stopRecording, cleanup: audioCleanup } = useAudio();
+  const wsRef = useRef<WebSocket | null>(null);
+  const { localStream, startRecording, stopRecording, cleanup: audioCleanup } = useAudio();
+  
   const { 
-    peerConnections, 
     handleOffer, 
     handleAnswer, 
     handleIceCandidate, 
@@ -39,17 +39,30 @@ const PTT: React.FC = () => {
     enableAudio,
     audioEnabled,
     closeAllConnections 
-  } = useWebRTC({ localStream, currentUser: user, sendWebSocket: (msg) => send(msg) });
+  } = useWebRTC({ 
+    localStream: localStream.current, 
+    currentUser: user, 
+    sendWebSocket: (msg) => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+    }
+  });
   
-  const wsRef = React.useRef<{ send: (msg: WebSocketMessage | string) => void } | null>(null);
-  
-  // WebSocket message handler
-  const handleWebSocketMessage = (message: WebSocketMessage) => {
+  // WebSocket message handler with targetUserId filter
+  const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
+    // Ignore messages not meant for us
+    if (message.targetUserId && user && message.targetUserId !== user.userId) {
+      console.log('[PTT] Ignoring message not for us:', message.type, 'target:', message.targetUserId, 'our userId:', user.userId);
+      return;
+    }
+    
     switch (message.type) {
       case 'offer':
         if (message.payload && message.userId && message.callsign) {
-          handleOffer(message.userId, message.callsign, message.payload);
-          setState(prev => ({ ...prev, isReceiving: true, activeCaller: message.callsign }));
+          const callsign = message.callsign;
+          handleOffer(message.userId, callsign, message.payload);
+          setState(prev => ({ ...prev, isReceiving: true, activeCaller: callsign }));
         }
         break;
         
@@ -67,7 +80,8 @@ const PTT: React.FC = () => {
         
       case 'ptt-start':
         if (message.callsign) {
-          setState(prev => ({ ...prev, isReceiving: true, activeCaller: message.callsign }));
+          const callsign = message.callsign;
+          setState(prev => ({ ...prev, isReceiving: true, activeCaller: callsign }));
         }
         break;
         
@@ -75,27 +89,59 @@ const PTT: React.FC = () => {
         setState(prev => ({ ...prev, isReceiving: false, activeCaller: '' }));
         break;
     }
-  };
+  }, [handleOffer, handleAnswer, handleIceCandidate, user]);
   
-  const { send, disconnect, isConnected } = useWebSocket({
-    url: `ws://localhost:8082/ws/ptt/${channelId}?token=${encodeURIComponent(user?.accessToken || '')}`,
-    onMessage: handleWebSocketMessage,
-    onOpen: () => {
+  // Connect WebSocket
+  useEffect(() => {
+    if (!channelId || !user) return;
+    
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname === 'localhost' ? 'localhost:8082' : `${window.location.hostname}:8082`;
+    const wsUrl = `${protocol}//${host}/ws/ptt/${channelId}?token=${encodeURIComponent(user.accessToken || '')}`;
+    
+    console.log('[PTT] Connecting to WebSocket:', wsUrl);
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    
+    ws.onopen = () => {
+      console.log('[PTT] WebSocket connected');
       setState(prev => ({ ...prev, isConnected: true, status: 'Connected', error: null }));
-    },
-    onClose: () => {
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const message: WebSocketMessage = JSON.parse(event.data);
+        console.log('[PTT] Received:', message.type, message);
+        handleWebSocketMessage(message);
+      } catch (err) {
+        console.error('[PTT] Failed to parse message:', err);
+      }
+    };
+    
+    ws.onclose = () => {
+      console.log('[PTT] WebSocket disconnected');
       setState(prev => ({ ...prev, isConnected: false, status: 'Disconnected' }));
       closeAllConnections();
-    },
-    onError: () => {
+    };
+    
+    ws.onerror = () => {
       setState(prev => ({ ...prev, error: 'WebSocket error occurred' }));
-    }
-  });
+    };
+    
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [channelId, user, handleWebSocketMessage, closeAllConnections]);
   
-  // Store send function in ref for WebRTC callbacks
-  useEffect(() => {
-    wsRef.current = { send };
-  }, [send]);
+  // Send function for WebSocket
+  const send = (message: WebSocketMessage | string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(typeof message === 'string' ? message : JSON.stringify(message));
+    }
+  };
+  
+  const isConnected = state.isConnected;
   
   const handlePTTPress = async () => {
     if (!isConnected || state.isReceiving || !user) return;
@@ -121,11 +167,14 @@ const PTT: React.FC = () => {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      disconnect();
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       audioCleanup();
       closeAllConnections();
     };
-  }, [disconnect, audioCleanup, closeAllConnections]);
+  }, [audioCleanup, closeAllConnections]);
   
   return (
     <div className="min-h-screen bg-gray-100 p-8">

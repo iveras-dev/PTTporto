@@ -169,6 +169,40 @@ fun main() {
         
         transaction {
             SchemaUtils.create(Users, Channels, ChannelMembers)
+            
+            // Create test user if not exists
+            var testUser = UserEntity.find { Users.email eq "roy@test.com" }.firstOrNull()
+            if (testUser == null) {
+                testUser = UserEntity.new {
+                    email = "roy@test.com"
+                    callsign = "RoyTest"
+                    passwordHash = BCrypt.withDefaults().hashToString(12, "roy123".toCharArray())
+                    role = UserRole.ADMIN
+                }
+            }
+            
+            // Create test channel if not exists
+            var testChannel = ChannelEntity.find { Channels.name eq "RoyTest" }.firstOrNull()
+            if (testChannel == null) {
+                testChannel = ChannelEntity.new {
+                    name = "RoyTest"
+                    admin = testUser
+                }
+            }
+            
+            // Add user as channel member
+            val existingMember = ChannelMemberEntity.find { 
+                ChannelMembers.userId eq testUser.id 
+            }.find { it.channel.id == testChannel.id }
+            
+            if (existingMember == null) {
+                ChannelMemberEntity.new {
+                    user = testUser
+                    channel = testChannel
+                }
+            }
+            
+            println("Test data initialized: User=${testUser.callsign}, Channel=${testChannel.name}")
         }
         
         routing {
@@ -518,6 +552,8 @@ fun main() {
                      return@webSocket
                  }
                  
+                 println("WebSocket connected: userId=$userId, callsign=$callsign, channelId=$channelId")
+                 
                  // Store connection in a shared map (in production, use Redis or similar)
                  val sessionId = "$userId-$channelId"
                  PTTWebSocketManager.addConnection(sessionId, this)
@@ -525,49 +561,57 @@ fun main() {
                  try {
                      send(Frame.Text("Connected to PTT channel $channelId as $callsign"))
                      
-                     for (frame in incoming) {
-                         when (frame) {
-                             is Frame.Text -> {
-                                 val message = frame.readText()
-                                 try {
-                                     val json = org.json.JSONObject(message)
-                                     val type = json.getString("type")
-                                     
-                                     when (type) {
-                                         "ptt-start" -> {
-                                             // Broadcast to other users in channel
-                                             val broadcastMessage = org.json.JSONObject()
-                                             broadcastMessage.put("type", "ptt-start")
-                                             broadcastMessage.put("userId", userId)
-                                             broadcastMessage.put("callsign", callsign)
-                                             broadcastMessage.put("channelId", channelId)
-                                             runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
+                         for (frame in incoming) {
+                             when (frame) {
+                                 is Frame.Text -> {
+                                     val message = frame.readText()
+                                     println("WebSocket received from $callsign (userId=$userId): $message")
+                                     try {
+                                         val json = org.json.JSONObject(message)
+                                         val type = json.getString("type")
+                                         
+                                         when (type) {
+                                             "ptt-start" -> {
+                                                 // Broadcast to other users in channel
+                                                 val broadcastMessage = org.json.JSONObject()
+                                                 broadcastMessage.put("type", "ptt-start")
+                                                 broadcastMessage.put("userId", userId)
+                                                 broadcastMessage.put("callsign", callsign)
+                                                 broadcastMessage.put("channelId", channelId)
+                                                 println("Broadcasting ptt-start to channel $channelId")
+                                                 runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
+                                             }
+                                             "ptt-stop" -> {
+                                                 val broadcastMessage = org.json.JSONObject()
+                                                 broadcastMessage.put("type", "ptt-stop")
+                                                 broadcastMessage.put("userId", userId)
+                                                 broadcastMessage.put("callsign", callsign)
+                                                 broadcastMessage.put("channelId", channelId)
+                                                 println("Broadcasting ptt-stop to channel $channelId")
+                                                 runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
+                                             }
+                                              "offer", "answer", "ice-candidate" -> {
+                                                  // Send signaling to SPECIFIC user (targetUserId) or broadcast if no target
+                                                  val targetUserId = if (json.has("targetUserId")) json.getInt("targetUserId") else null
+                                                  val broadcastMessage = org.json.JSONObject()
+                                                  broadcastMessage.put("type", type)
+                                                  broadcastMessage.put("userId", userId)
+                                                  broadcastMessage.put("callsign", callsign)
+                                                  broadcastMessage.put("payload", json.getJSONObject("payload"))
+                                                  if (targetUserId != null) {
+                                                      broadcastMessage.put("targetUserId", targetUserId)
+                                                  }
+                                                  println("Broadcasting $type from $userId to channel $channelId (target: $targetUserId)")
+                                                  runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
+                                             }
                                          }
-                                         "ptt-stop" -> {
-                                             val broadcastMessage = org.json.JSONObject()
-                                             broadcastMessage.put("type", "ptt-stop")
-                                             broadcastMessage.put("userId", userId)
-                                             broadcastMessage.put("callsign", callsign)
-                                             broadcastMessage.put("channelId", channelId)
-                                             runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
-                                         }
-                                          "offer", "answer", "ice-candidate" -> {
-                                              // Broadcast signaling to ALL users in channel (except sender)
-                                              val broadcastMessage = org.json.JSONObject()
-                                              broadcastMessage.put("type", type)
-                                              broadcastMessage.put("userId", userId)
-                                              broadcastMessage.put("callsign", callsign)
-                                              broadcastMessage.put("payload", json.getJSONObject("payload"))
-                                              runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
-                                         }
+                                     } catch (e: Exception) {
+                                         println("Error parsing message: ${e.message}")
                                      }
-                                 } catch (e: Exception) {
-                                     println("Error parsing message: ${e.message}")
                                  }
+                                 else -> {}
                              }
-                             else -> {}
                          }
-                     }
                  } catch (e: Exception) {
                      println("WebSocket error for $sessionId: ${e.message}")
                  } finally {

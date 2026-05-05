@@ -1,7 +1,8 @@
 // TypeScript types for PTT WebRTC
 export interface WebSocketMessage {
   type: 'offer' | 'answer' | 'ice-candidate' | 'ptt-start' | 'ptt-stop';
-  userId?: number;
+  userId?: number; // Who sent this message
+  targetUserId?: number; // Who this message is FOR (for routing)
   callsign?: string;
   channelId?: number;
   payload?: any;
