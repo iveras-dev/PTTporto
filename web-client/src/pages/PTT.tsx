@@ -198,6 +198,20 @@ const PTT: React.FC = () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
+      // Only cleanup if this is still the current WebSocket
+      if (wsRef.current === ws) {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+        wsRef.current = null;
+      }
+    };
+    
+    return () => {
+      console.log('[PTT] Cleaning up WebSocket connection');
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }
