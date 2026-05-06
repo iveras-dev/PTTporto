@@ -77,8 +77,10 @@ const PTT: React.FC = () => {
             .filter(u => u.userId !== user?.userId); // Filter out current user
           setChannelUsers(users);
           console.log('[PTT] ✅ Received user list (filtered):', users);
+          console.log('[PTT] Current user ID:', user?.userId, 'Type:', typeof user?.userId);
           // Also log to window for debugging
           (window as any).channelUsers = users;
+          (window as any).currentUserId = user?.userId;
         } else {
           console.warn('[PTT] ⚠️ No users array in connected message or not an array');
         }
@@ -268,6 +270,11 @@ const PTT: React.FC = () => {
     
     // Create WebRTC offer for EACH user in channel (now localStream is set)
     for (const userInChannel of channelUsers) {
+      // Skip creating offer for ourselves
+      if (userInChannel.userId === user?.userId) {
+        console.log(`[PTT] ⚠️ Skipping offer for ourselves (${userInChannel.callsign})`);
+        continue;
+      }
       console.log(`[PTT] Creating offer for user ${userInChannel.userId} (${userInChannel.callsign})`);
       await createOffer(userInChannel.userId, userInChannel.callsign);
     }
