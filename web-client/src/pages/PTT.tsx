@@ -37,6 +37,7 @@ const PTT: React.FC = () => {
   const { localStream, initializeAudio, startRecording, stopRecording, cleanup: audioCleanup } = useAudio();
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  const isTransmittingRef = useRef(false); // Ref to track transmitting state outside React state
   
   // Stable sendWebSocket function
   const sendWebSocket = useCallback((msg: WebSocketMessage | string) => {
@@ -242,16 +243,18 @@ const PTT: React.FC = () => {
     
     startRecording();
     setState(prev => ({ ...prev, isTransmitting: true, status: 'Transmitting...' }));
+    isTransmittingRef.current = true; // Also set ref
   }, [state.isTransmitting, state.transmittingUserId, state.isReceiving, isConnected, user, channelUsers, initializeAudio, createOffer, send, startRecording, channelId, setState]);
   
   const handlePTTRelease = useCallback(() => {
-    if (!state.isTransmitting) return;
+    if (!isTransmittingRef.current) return; // Use ref to avoid stale closure
     
     send({ type: 'ptt-stop', channelId: parseInt(channelId!) });
     setState(prev => ({ ...prev, transmittingUserId: null }));
     stopRecording();
     setState(prev => ({ ...prev, isTransmitting: false, status: 'Transmission ended' }));
-  }, [state.isTransmitting, send, channelId, stopRecording, setState]);
+    isTransmittingRef.current = false; // Reset ref
+  }, [send, channelId, stopRecording, setState]);
   
   // Spacebar PTT support
   useEffect(() => {
