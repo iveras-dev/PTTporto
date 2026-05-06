@@ -38,6 +38,9 @@ const PTT: React.FC = () => {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   const isTransmittingRef = useRef(false); // Ref to track transmitting state outside React state
+  const spacePressedRef = useRef(false); // Track if spacebar is currently pressed
+  const handlePTTPressRef = useRef<(() => void) | null>(null);
+  const handlePTTReleaseRef = useRef<(() => void) | null>(null);
   
   // Stable sendWebSocket function
   const sendWebSocket = useCallback((msg: WebSocketMessage | string) => {
@@ -211,19 +214,26 @@ const PTT: React.FC = () => {
   
   const handlePTTPress = useCallback(async () => {
     // Guard: block if already transmitting (check ref immediately)
-    if (isTransmittingRef.current) return;
+    if (isTransmittingRef.current) {
+      console.log('[PTT] ⚠️ PTT press ignored - already transmitting (ref is true)');
+      return;
+    }
+    
+    // SET REF IMMEDIATELY to true (BEFORE any checks or async operations)
+    isTransmittingRef.current = true;
+    console.log('[PTT] 🎤 PTT PRESSED - isTransmittingRef set to true');
     
     // Block if someone else is transmitting (and it's not me)
     if (state.transmittingUserId && state.transmittingUserId !== user?.userId) {
       setState(prev => ({ ...prev, error: 'Channel is occupied by another user' }));
+      isTransmittingRef.current = false; // Reset ref
       return;
     }
     
-    if (!isConnected || state.isReceiving || !user) return;
-    
-    // SET REF IMMEDIATELY to true (before any async operations)
-    isTransmittingRef.current = true;
-    console.log('[PTT] 🎤 PTT PRESSED - isTransmittingRef set to true');
+    if (!isConnected || state.isReceiving || !user) {
+      isTransmittingRef.current = false; // Reset ref
+      return;
+    }
     
     // Initialize audio FIRST (get microphone stream)
     try {
@@ -254,10 +264,12 @@ const PTT: React.FC = () => {
   const handlePTTRelease = useCallback(() => {
     if (!isTransmittingRef.current) {
       console.log('[PTT] ⚠️ Release ignored - not transmitting (ref is false)');
+      spacePressedRef.current = false; // Reset anyway
       return; // Use ref to avoid stale closure
     }
     
     console.log('[PTT] 🔊 PTT RELEASED - stopping transmission');
+    spacePressedRef.current = false; // Reset spacebar state
     send({ type: 'ptt-stop', channelId: parseInt(channelId!) });
     setState(prev => ({ ...prev, transmittingUserId: null }));
     stopRecording();
@@ -266,19 +278,29 @@ const PTT: React.FC = () => {
     console.log('[PTT] ✅ PTT fully stopped');
   }, [send, channelId, stopRecording, setState]);
   
-  // Spacebar PTT support
+  // Update handler refs when callbacks change
+  useEffect(() => {
+    handlePTTPressRef.current = handlePTTPress;
+    handlePTTReleaseRef.current = handlePTTRelease;
+  }, [handlePTTPress, handlePTTRelease]);
+  
+  // Spacebar PTT support (stable listeners using refs)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
+      if (e.code === 'Space' && !e.repeat && !spacePressedRef.current) {
         e.preventDefault(); // Prevent page scroll
-        handlePTTPress();
+        spacePressedRef.current = true; // Mark spacebar as pressed
+        console.log('[PTT] 🎤 Spacebar KEYDOWN detected');
+        handlePTTPressRef.current?.();
       }
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
+      if (e.code === 'Space' && spacePressedRef.current) {
         e.preventDefault();
-        handlePTTRelease();
+        spacePressedRef.current = false; // Mark spacebar as released
+        console.log('[PTT] 🔊 Spacebar KEYUP detected');
+        handlePTTReleaseRef.current?.();
       }
     };
     
@@ -289,7 +311,7 @@ const PTT: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [handlePTTPress, handlePTTRelease]);
+  }, []); // Empty deps - listeners never change, they use refs
   
   // Cleanup on unmount
   useEffect(() => {
