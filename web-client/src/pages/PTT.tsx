@@ -210,8 +210,8 @@ const PTT: React.FC = () => {
   const isConnected = state.isConnected;
   
   const handlePTTPress = useCallback(async () => {
-    // Guard: block if already transmitting
-    if (state.isTransmitting) return;
+    // Guard: block if already transmitting (check ref immediately)
+    if (isTransmittingRef.current) return;
     
     // Block if someone else is transmitting (and it's not me)
     if (state.transmittingUserId && state.transmittingUserId !== user?.userId) {
@@ -221,6 +221,10 @@ const PTT: React.FC = () => {
     
     if (!isConnected || state.isReceiving || !user) return;
     
+    // SET REF IMMEDIATELY to true (before any async operations)
+    isTransmittingRef.current = true;
+    console.log('[PTT] 🎤 PTT PRESSED - isTransmittingRef set to true');
+    
     // Initialize audio FIRST (get microphone stream)
     try {
       await initializeAudio();
@@ -228,6 +232,7 @@ const PTT: React.FC = () => {
     } catch (error) {
       console.error('[PTT] ❌ Failed to initialize audio:', error);
       setAudioError('Failed to access microphone');
+      isTransmittingRef.current = false; // Reset on error
       return;
     }
     
@@ -243,17 +248,22 @@ const PTT: React.FC = () => {
     
     startRecording();
     setState(prev => ({ ...prev, isTransmitting: true, status: 'Transmitting...' }));
-    isTransmittingRef.current = true; // Also set ref
-  }, [state.isTransmitting, state.transmittingUserId, state.isReceiving, isConnected, user, channelUsers, initializeAudio, createOffer, send, startRecording, channelId, setState]);
+    console.log('[PTT] ✅ PTT fully started');
+  }, [state.transmittingUserId, state.isReceiving, isConnected, user, channelUsers, initializeAudio, createOffer, send, startRecording, channelId, setState]);
   
   const handlePTTRelease = useCallback(() => {
-    if (!isTransmittingRef.current) return; // Use ref to avoid stale closure
+    if (!isTransmittingRef.current) {
+      console.log('[PTT] ⚠️ Release ignored - not transmitting (ref is false)');
+      return; // Use ref to avoid stale closure
+    }
     
+    console.log('[PTT] 🔊 PTT RELEASED - stopping transmission');
     send({ type: 'ptt-stop', channelId: parseInt(channelId!) });
     setState(prev => ({ ...prev, transmittingUserId: null }));
     stopRecording();
     setState(prev => ({ ...prev, isTransmitting: false, status: 'Transmission ended' }));
     isTransmittingRef.current = false; // Reset ref
+    console.log('[PTT] ✅ PTT fully stopped');
   }, [send, channelId, stopRecording, setState]);
   
   // Spacebar PTT support
