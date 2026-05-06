@@ -8,6 +8,12 @@ export const useAudio = () => {
   
   const initializeAudio = useCallback(async (): Promise<MediaStream> => {
     try {
+      // Stop old stream if exists
+      if (localStream.current) {
+        localStream.current.getTracks().forEach(track => track.stop());
+        localStream.current = null;
+      }
+      
       // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -19,7 +25,19 @@ export const useAudio = () => {
         }
       });
       
+      // Verify tracks are live
+      const audioTrack = stream.getAudioTracks()[0];
+      if (!audioTrack || audioTrack.readyState === 'ended') {
+        throw new Error('Microphone stream has no live tracks');
+      }
+      
       localStream.current = stream;
+      console.log('[Audio] ✅ Stream obtained, track state:', {
+        id: audioTrack.id,
+        readyState: audioTrack.readyState,
+        enabled: audioTrack.enabled,
+        muted: audioTrack.muted
+      });
       
       // Create AudioContext for playback
       if (!audioContext.current) {
@@ -28,7 +46,7 @@ export const useAudio = () => {
       
       return stream;
     } catch (error) {
-      console.error('Failed to initialize audio:', error);
+      console.error('[Audio] ❌ Failed to initialize audio:', error);
       throw new Error('Microphone access denied or not available');
     }
   }, []);
@@ -46,7 +64,7 @@ export const useAudio = () => {
       let recorder = null;
       for (const mimeType of mimeTypes) {
         try {
-          const options = mimeType ? { mimeType } : undefined;
+          const options = mimeType ? { mimeType: mimeType } : undefined;
           recorder = new MediaRecorder(localStream.current!, options);
           break;
         } catch (e) {

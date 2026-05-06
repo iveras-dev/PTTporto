@@ -253,19 +253,25 @@ const PTT: React.FC = () => {
       return;
     }
     
-    // Reuse existing stream if available, otherwise initialize
-    if (!localStream.current || localStream.current.getAudioTracks().length === 0) {
-      try {
-        await initializeAudio();
-        console.log('[PTT] ✅ Audio initialized before creating offers');
-      } catch (error) {
-        console.error('[PTT] ❌ Failed to initialize audio:', error);
-        setAudioError('Failed to access microphone');
-        isTransmittingRef.current = false; // Reset on error
-        return;
+    // Always get fresh stream to avoid ended tracks
+    try {
+      // Stop old stream if exists and tracks are ended
+      if (localStream.current) {
+        const tracks = localStream.current.getAudioTracks();
+        if (tracks.length > 0 && tracks[0].readyState === 'ended') {
+          console.log('[PTT] Old stream tracks are ended, getting fresh stream...');
+          localStream.current.getTracks().forEach(track => track.stop());
+          localStream.current = null;
+        }
       }
-    } else {
-      console.log('[PTT] ✅ Using existing audio stream');
+      
+      await initializeAudio();
+      console.log('[PTT] ✅ Audio initialized before creating offers');
+    } catch (error) {
+      console.error('[PTT] ❌ Failed to initialize audio:', error);
+      setAudioError('Failed to access microphone');
+      isTransmittingRef.current = false; // Reset on error
+      return;
     }
     
     // Create WebRTC offer for EACH user in channel (now localStream is set)
