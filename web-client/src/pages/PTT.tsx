@@ -34,7 +34,7 @@ const PTT: React.FC = () => {
   const [audioError, setAudioError] = useState<string | null>(null);
   
   const wsRef = useRef<WebSocket | null>(null);
-  const { localStream, startRecording, stopRecording, cleanup: audioCleanup } = useAudio();
+  const { localStream, initializeAudio, startRecording, stopRecording, cleanup: audioCleanup } = useAudio();
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   
@@ -217,15 +217,25 @@ const PTT: React.FC = () => {
     
     if (!isConnected || state.isReceiving || !user) return;
     
-    // Notify others that PTT started
-    send({ type: 'ptt-start', channelId: parseInt(channelId!), callsign: user.callsign });
-    setState(prev => ({ ...prev, transmittingUserId: user.userId }));
+    // Initialize audio FIRST (get microphone stream)
+    try {
+      await initializeAudio();
+      console.log('[PTT] ✅ Audio initialized before creating offers');
+    } catch (error) {
+      console.error('[PTT] ❌ Failed to initialize audio:', error);
+      setAudioError('Failed to access microphone');
+      return;
+    }
     
-    // Create WebRTC offer for EACH user in channel
+    // Create WebRTC offer for EACH user in channel (now localStream is set)
     for (const userInChannel of channelUsers) {
       console.log(`[PTT] Creating offer for user ${userInChannel.userId} (${userInChannel.callsign})`);
       await createOffer(userInChannel.userId, userInChannel.callsign);
     }
+    
+    // Notify others that PTT started (after offers are created)
+    send({ type: 'ptt-start', channelId: parseInt(channelId!), callsign: user.callsign });
+    setState(prev => ({ ...prev, transmittingUserId: user.userId }));
     
     startRecording();
     setState(prev => ({ ...prev, isTransmitting: true, status: 'Transmitting...' }));
