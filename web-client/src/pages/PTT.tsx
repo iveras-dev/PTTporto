@@ -251,15 +251,19 @@ const PTT: React.FC = () => {
       return;
     }
     
-    // Initialize audio FIRST (get microphone stream)
-    try {
-      await initializeAudio();
-      console.log('[PTT] ✅ Audio initialized before creating offers');
-    } catch (error) {
-      console.error('[PTT] ❌ Failed to initialize audio:', error);
-      setAudioError('Failed to access microphone');
-      isTransmittingRef.current = false; // Reset on error
-      return;
+    // Reuse existing stream if available, otherwise initialize
+    if (!localStream.current || localStream.current.getAudioTracks().length === 0) {
+      try {
+        await initializeAudio();
+        console.log('[PTT] ✅ Audio initialized before creating offers');
+      } catch (error) {
+        console.error('[PTT] ❌ Failed to initialize audio:', error);
+        setAudioError('Failed to access microphone');
+        isTransmittingRef.current = false; // Reset on error
+        return;
+      }
+    } else {
+      console.log('[PTT] ✅ Using existing audio stream');
     }
     
     // Create WebRTC offer for EACH user in channel (now localStream is set)
@@ -291,14 +295,6 @@ const PTT: React.FC = () => {
     stopRecording();
     stopAllStreams(); // Stop all WebRTC senders (stop audio flowing)
     closeAllConnections(); // CLOSE all PeerConnections (this stops audio at receiver)
-    // Also stop local stream tracks to ensure audio stops
-    if (localStream.current) {
-      localStream.current.getTracks().forEach(track => {
-        track.stop();
-        console.log('[PTT] 🛑 Stopped local track:', track.kind);
-      });
-      localStream.current = null;
-    }
     setState(prev => ({ ...prev, isTransmitting: false, status: 'Transmission ended' }));
     isTransmittingRef.current = false; // Reset ref
     console.log('[PTT] ✅ PTT fully stopped');

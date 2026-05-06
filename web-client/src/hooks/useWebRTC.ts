@@ -42,6 +42,18 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
       }
     };
     
+    // Monitor ICE connection state
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[WebRTC] ICE state for ${remoteCallsign}:`, pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        console.log(`[WebRTC] ✅ ICE connected for ${remoteCallsign}`);
+      } else if (pc.iceConnectionState === 'failed') {
+        console.error(`[WebRTC] ❌ ICE failed for ${remoteCallsign}`);
+      } else if (pc.iceConnectionState === 'disconnected') {
+        console.warn(`[WebRTC] ⚠️ ICE disconnected for ${remoteCallsign}`);
+      }
+    };
+    
     // Handle incoming audio stream
     pc.ontrack = (event) => {
       console.log('[WebRTC] 🎧 TRACK RECEIVED from', remoteCallsign);
@@ -61,21 +73,29 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
         }
         
         audioEl.srcObject = stream;
-        audioEl.load(); // Force load the stream
         console.log('[WebRTC] Set srcObject to remote stream');
         
         // Try to play (may fail without user interaction)
         const playPromise = audioEl.play();
         if (playPromise !== undefined) {
           playPromise.then(() => {
-            console.log('[WebRTC] ✅ Audio PLAYING!');
-          }).catch(e => {
-            console.error('[WebRTC] ❌ Audio play error:', e.message);
-            // Show enable audio button in UI
-            if (audioErrorCallbackRef.current) {
-              audioErrorCallbackRef.current(`Audio blocked for ${remoteCallsign}. Click "Enable Audio" to hear them.`);
-            }
-          });
+              console.log('[WebRTC] ✅ Audio PLAYING!');
+              // Verify audio is actually outputting
+              setTimeout(() => {
+                console.log('[WebRTC] Audio element verification:', {
+                  volume: audioEl.volume,
+                  muted: audioEl.muted,
+                  paused: audioEl.paused,
+                  readyState: audioEl.readyState
+                });
+              }, 1000);
+            }).catch(e => {
+              console.error('[WebRTC] ❌ Audio play error:', e.message);
+              // Show enable audio button in UI
+              if (audioErrorCallbackRef.current) {
+                audioErrorCallbackRef.current(`Audio blocked for ${remoteCallsign}. Click "Enable Audio" to hear them.`);
+              }
+            });
         }
       }
     };
@@ -185,13 +205,26 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
       
       // Add local stream if available
       if (localStream.current) {
+        const audioTracks = localStream.current.getAudioTracks();
+        console.log(`[WebRTC] Local stream has ${audioTracks.length} audio tracks`);
+        audioTracks.forEach(track => {
+          console.log(`[WebRTC] Audio track state:`, {
+            enabled: track.enabled,
+            muted: track.muted,
+            readyState: track.readyState,
+            label: track.label
+          });
+        });
+        
         // Check if tracks are already added
         const senders = pc.connection.getSenders();
-        const audioTrack = localStream.current.getAudioTracks()[0];
+        const audioTrack = audioTracks[0];
         if (audioTrack && !senders.find(s => s.track?.id === audioTrack.id)) {
           pc.connection.addTrack(audioTrack, localStream.current);
           console.log(`[WebRTC] Added local stream tracks for ${targetCallsign}`);
         }
+      } else {
+        console.warn(`[WebRTC] ⚠️ No local stream available for ${targetCallsign}!`);
       }
       
       const offer = await pc.connection.createOffer();
