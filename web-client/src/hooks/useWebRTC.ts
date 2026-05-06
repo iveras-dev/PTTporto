@@ -195,6 +195,19 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
     peerConnections.current.clear();
   }, []);
   
+  // Stop all connections and local stream (for PTT stop)
+  const stopAllStreams = useCallback(() => {
+    // Stop all tracks in PeerConnections
+    peerConnections.current.forEach((peer) => {
+      peer.connection.getSenders().forEach(sender => {
+        if (sender.track) {
+          sender.track.stop();
+        }
+      });
+    });
+    // Note: localStream is managed by useAudio hook
+  }, []);
+  
   const closeConnection = useCallback((userId: number) => {
     const peer = peerConnections.current.get(userId);
     if (peer) {
@@ -222,6 +235,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
     audioEnabled,
     closeAllConnections,
     closeConnection,
+    stopAllStreams,
     setAudioErrorCallback
   };
 };

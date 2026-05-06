@@ -56,7 +56,8 @@ const PTT: React.FC = () => {
     createOffer, 
     enableAudio,
     audioEnabled,
-    closeAllConnections
+    closeAllConnections,
+    stopAllStreams
   } = useWebRTC({ 
     localStream, 
     currentUser: user, 
@@ -273,10 +274,20 @@ const PTT: React.FC = () => {
     send({ type: 'ptt-stop', channelId: parseInt(channelId!) });
     setState(prev => ({ ...prev, transmittingUserId: null }));
     stopRecording();
+    stopAllStreams(); // Stop all WebRTC senders (stop audio flowing)
+    closeAllConnections(); // CLOSE all PeerConnections (this stops audio at receiver)
+    // Also stop local stream tracks to ensure audio stops
+    if (localStream.current) {
+      localStream.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('[PTT] 🛑 Stopped local track:', track.kind);
+      });
+      localStream.current = null;
+    }
     setState(prev => ({ ...prev, isTransmitting: false, status: 'Transmission ended' }));
     isTransmittingRef.current = false; // Reset ref
     console.log('[PTT] ✅ PTT fully stopped');
-  }, [send, channelId, stopRecording, setState]);
+  }, [send, channelId, stopRecording, stopAllStreams, closeAllConnections, localStream, setState]);
   
   // Update handler refs when callbacks change
   useEffect(() => {
@@ -287,20 +298,28 @@ const PTT: React.FC = () => {
   // Spacebar PTT support (stable listeners using refs)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat && !spacePressedRef.current) {
+      if (e.code === 'Space' && !e.repeat) {
         e.preventDefault(); // Prevent page scroll
-        spacePressedRef.current = true; // Mark spacebar as pressed
-        console.log('[PTT] 🎤 Spacebar KEYDOWN detected');
-        handlePTTPressRef.current?.();
+        if (!spacePressedRef.current) {
+          spacePressedRef.current = true; // Mark spacebar as pressed
+          console.log('[PTT] 🎤 Spacebar KEYDOWN detected');
+          handlePTTPressRef.current?.();
+        } else {
+          console.log('[PTT] ⚠️ Spacebar KEYDOWN ignored - already pressed (repeat or rapid fire)');
+        }
       }
     };
     
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && spacePressedRef.current) {
+      if (e.code === 'Space') {
         e.preventDefault();
-        spacePressedRef.current = false; // Mark spacebar as released
-        console.log('[PTT] 🔊 Spacebar KEYUP detected');
-        handlePTTReleaseRef.current?.();
+        if (spacePressedRef.current) {
+          spacePressedRef.current = false; // Mark spacebar as released
+          console.log('[PTT] 🔊 Spacebar KEYUP detected');
+          handlePTTReleaseRef.current?.();
+        } else {
+          console.log('[PTT] ⚠️ Spacebar KEYUP ignored - was not pressed');
+        }
       }
     };
     
@@ -422,10 +441,10 @@ const PTT: React.FC = () => {
                 ${state.isTransmitting ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}
                 ${audioError ? 'opacity-50' : ''}
                 ${state.isReceiving || !state.isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
-              onMouseDown={handlePTTPress}
-              onMouseUp={handlePTTRelease}
-              onTouchStart={handlePTTPress}
-              onTouchEnd={handlePTTRelease}
+              onMouseDown={(e) => { e.preventDefault(); handlePTTPress(); }}
+              onMouseUp={(e) => { e.preventDefault(); handlePTTRelease(); }}
+              onTouchStart={(e) => { e.preventDefault(); handlePTTPress(); }}
+              onTouchEnd={(e) => { e.preventDefault(); handlePTTRelease(); }}
               disabled={!!audioError || state.isReceiving || !state.isConnected}
             >
               {audioError ? 'NO AUDIO!' : (state.isTransmitting ? 'TALKING...' : 'PTT')}
