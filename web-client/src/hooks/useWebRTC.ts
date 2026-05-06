@@ -1,13 +1,14 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import { WebSocketMessage, PeerConnectionState } from '../types/ptt';
 
 interface UseWebRTCOptions {
   localStream: React.RefObject<MediaStream | null>;
   currentUser: { userId: number; callsign: string } | null;
-  sendWebSocket: (msg: WebSocketMessage) => void;
+  sendWebSocket: (msg: WebSocketMessage | string) => void;
+  onAudioError?: (error: string) => void;
 }
 
-export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTCOptions) => {
+export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioError }: UseWebRTCOptions) => {
   const peerConnections = useRef<Map<number, PeerConnectionState>>(new Map());
   const [audioEnabled, setAudioEnabled] = useState(false);
   
@@ -18,7 +19,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
     ]
   };
   
-  const createPeerConnection = (remoteUserId: number, remoteCallsign: string): RTCPeerConnection => {
+  const createPeerConnection = useCallback((remoteUserId: number, remoteCallsign: string): RTCPeerConnection => {
     // Close existing connection if any
     const existing = peerConnections.current.get(remoteUserId);
     if (existing) {
@@ -34,21 +35,20 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
         sendWebSocket({
           type: 'ice-candidate',
           userId: currentUser.userId,
-          targetUserId: remoteUserId, // This is FOR the remote user
+          targetUserId: remoteUserId,
           callsign: currentUser.callsign,
           payload: event.candidate
         });
       }
     };
     
-    // Handle incoming audio stream - FIXED VERSION
+    // Handle incoming audio stream
     pc.ontrack = (event) => {
       console.log('[WebRTC] 🎧 TRACK RECEIVED from', remoteCallsign);
       const stream = event.streams[0];
       if (stream) {
         console.log('[WebRTC] Stream has', stream.getTracks().length, 'tracks');
         
-        // Create or update audio element
         let audioEl = document.getElementById(`audio-${remoteUserId}`) as HTMLAudioElement;
         if (!audioEl) {
           audioEl = document.createElement('audio');
@@ -62,13 +62,12 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
         audioEl.srcObject = stream;
         console.log('[WebRTC] Set srcObject to remote stream');
         
-        // Try to play - may fail without user gesture
         audioEl.play().then(() => {
           console.log('[WebRTC] ✅ Audio PLAYING!');
         }).catch(e => {
           console.error('[WebRTC] ❌ Audio play error:', e.message);
-          // Show button to user
           audioEl.controls = true;
+          if (onAudioError) onAudioError(e.message);
         });
       }
     };
@@ -81,57 +80,68 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
     });
     
     return pc;
-  };
+  }, [currentUser, sendWebSocket, onAudioError]);
   
-  const handleOffer = async (fromUserId: number, fromCallsign: string, offer: RTCSessionDescriptionInit) => {
+  const handleOffer = useCallback(async (fromUserId: number, fromCallsign: string, offer: RTCSessionDescriptionInit) => {
     try {
+      console.log(`[WebRTC] 📞 Received offer from ${fromCallsign} (${fromUserId})`);
       let pc = peerConnections.current.get(fromUserId);
       if (!pc) {
+        console.log(`[WebRTC] Creating new peer connection for ${fromCallsign}`);
         pc = { userId: fromUserId, callsign: fromCallsign, connection: createPeerConnection(fromUserId, fromCallsign) };
         peerConnections.current.set(fromUserId, pc);
       }
       
+      console.log(`[WebRTC] Setting remote description from ${fromCallsign}`);
       await pc.connection.setRemoteDescription(new RTCSessionDescription(offer));
+      console.log(`[WebRTC] Creating answer for ${fromCallsign}`);
       const answer = await pc.connection.createAnswer();
       await pc.connection.setLocalDescription(answer);
+      console.log(`[WebRTC] Answer created, sending to ${fromCallsign}`);
       
       if (currentUser) {
         sendWebSocket({
           type: 'answer',
-          userId: currentUser.userId, // Who is sending this answer (us)
-          targetUserId: fromUserId, // Who this answer is FOR (the offerer)
+          userId: currentUser.userId,
+          targetUserId: fromUserId,
           callsign: currentUser.callsign,
           payload: answer
         });
+        console.log(`[WebRTC] ✅ Answer sent to ${fromCallsign}`);
       }
     } catch (error) {
-      console.error('[WebRTC] Error handling offer:', error);
+      console.error('[WebRTC] ❌ Error handling offer:', error);
     }
-  };
+  }, [currentUser, sendWebSocket, createPeerConnection]);
   
-  const handleAnswer = async (fromUserId: number, answer: RTCSessionDescriptionInit) => {
+  const handleAnswer = useCallback(async (fromUserId: number, answer: RTCSessionDescriptionInit) => {
     try {
+      console.log(`[WebRTC] 📞 Received answer from ${fromUserId}`);
       const pc = peerConnections.current.get(fromUserId);
       if (pc) {
         await pc.connection.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log(`[WebRTC] ✅ Remote description set for ${fromUserId}`);
+      } else {
+        console.warn(`[WebRTC] ⚠️ No peer connection found for user ${fromUserId}`);
       }
     } catch (error) {
-      console.error('[WebRTC] Error handling answer:', error);
+      console.error('[WebRTC] ❌ Error handling answer:', error);
     }
-  };
+  }, []);
   
-  const handleIceCandidate = async (fromUserId: number, candidate: RTCIceCandidateInit) => {
+  const handleIceCandidate = useCallback(async (fromUserId: number, candidate: RTCIceCandidateInit) => {
     try {
       const pc = peerConnections.current.get(fromUserId);
       if (pc && candidate) {
         await pc.connection.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log(`[WebRTC] ✅ ICE candidate added for ${fromUserId}`);
       }
     } catch (error) {
-      console.error('[WebRTC] Error handling ICE candidate:', error);
+      console.error('[WebRTC] ❌ Error handling ICE candidate:', error);
     }
-  };
+  }, []);
   
-  const createOffer = async (targetUserId: number, targetCallsign: string): Promise<void> => {
+  const createOffer = useCallback(async (targetUserId: number, targetCallsign: string): Promise<void> => {
     try {
       let pc = peerConnections.current.get(targetUserId);
       if (!pc) {
@@ -144,47 +154,48 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
         localStream.current.getTracks().forEach(track => {
           pc!.connection.addTrack(track, localStream.current!);
         });
+        console.log(`[WebRTC] Added local stream tracks for ${targetCallsign}`);
       }
       
       const offer = await pc.connection.createOffer();
       await pc.connection.setLocalDescription(offer);
+      console.log(`[WebRTC] Offer created for ${targetCallsign}`);
       
       if (currentUser) {
         sendWebSocket({
           type: 'offer',
-          userId: currentUser.userId, // Who is sending this offer (us)
-          targetUserId: targetUserId, // Who this offer is FOR
+          userId: currentUser.userId,
+          targetUserId: targetUserId,
           callsign: currentUser.callsign,
           payload: offer
         });
+        console.log(`[WebRTC] ✅ Offer sent to ${targetCallsign}`);
       }
     } catch (error) {
-      console.error('[WebRTC] Error creating offer:', error);
+      console.error('[WebRTC] ❌ Error creating offer:', error);
     }
-  };
+  }, [currentUser, sendWebSocket, createPeerConnection, localStream]);
   
-  const enableAudio = () => {
+  const enableAudio = useCallback(() => {
     setAudioEnabled(true);
-    // Enable all existing audio elements
-     peerConnections.current.forEach((_, userId) => {
-       const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
+    peerConnections.current.forEach((_, userId) => {
+      const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
       if (audioEl) {
         audioEl.play().catch(e => console.error('Play error:', e));
       }
     });
-  };
+  }, []);
   
-  const closeAllConnections = () => {
+  const closeAllConnections = useCallback(() => {
     peerConnections.current.forEach((peer, userId) => {
       peer.connection.close();
-      // Remove audio element
       const audioEl = document.getElementById(`audio-${userId}`);
       if (audioEl) audioEl.remove();
     });
     peerConnections.current.clear();
-  };
+  }, []);
   
-  const closeConnection = (userId: number) => {
+  const closeConnection = useCallback((userId: number) => {
     const peer = peerConnections.current.get(userId);
     if (peer) {
       peer.connection.close();
@@ -192,7 +203,13 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
       if (audioEl) audioEl.remove();
       peerConnections.current.delete(userId);
     }
-  };
+  }, []);
+  
+  // Audio error callback (set by PTT component)
+  const audioErrorCallbackRef = useRef<((error: string) => void) | null>(null);
+  const setAudioErrorCallback = useCallback((callback: (error: string) => void) => {
+    audioErrorCallbackRef.current = callback;
+  }, []);
   
   return {
     peerConnections,
@@ -204,6 +221,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
     enableAudio,
     audioEnabled,
     closeAllConnections,
-    closeConnection
+    closeConnection,
+    setAudioErrorCallback
   };
 };

@@ -532,12 +532,37 @@ fun main() {
                       return@webSocket
                   }
                   
-                  // Store connection in a shared map (in production, use Redis or similar)
-                  val sessionId = "$userId-$channelId"
-                  PTTWebSocketManager.addConnection(sessionId, this)
-                 
-                 try {
-                     send(Frame.Text("Connected to PTT channel $channelId as $callsign"))
+                   // Store connection in a shared map (in production, use Redis or similar)
+                   val sessionId = "$userId-$channelId"
+                   PTTWebSocketManager.addConnection(sessionId, this)
+                   
+                   // Get list of other users in channel
+                   val usersInChannel = transaction {
+                       ChannelMemberEntity.find { ChannelMembers.channelId eq channelId }
+                           .filter { it.user.id.value != userId }
+                           .map { it.user.id.value }
+                   }
+                   
+                  try {
+                      // Send confirmation with user list
+                      val connectedMsg = org.json.JSONObject()
+                      connectedMsg.put("type", "connected")
+                      connectedMsg.put("userId", userId)
+                      connectedMsg.put("callsign", callsign)
+                      connectedMsg.put("channelId", channelId)
+                      
+                      val usersArray = org.json.JSONArray()
+                      usersInChannel.forEach { uid ->
+                          val userCallsign = transaction { UserEntity.findById(uid)?.callsign ?: "Unknown" }
+                          val userObj = org.json.JSONObject()
+                          userObj.put("userId", uid)
+                          userObj.put("callsign", userCallsign)
+                          usersArray.put(userObj)
+                      }
+                      connectedMsg.put("users", usersArray)
+                      
+                      send(Frame.Text(connectedMsg.toString()))
+                      println("[WS] Sent user list to $userId: $usersInChannel")
                      
                      for (frame in incoming) {
                          when (frame) {

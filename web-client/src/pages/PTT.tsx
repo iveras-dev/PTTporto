@@ -12,6 +12,7 @@ interface PTTState {
   status: string;
   isConnected: boolean;
   error: string | null;
+  transmittingUserId: number | null;
 }
 
 const PTT: React.FC = () => {
@@ -25,11 +26,24 @@ const PTT: React.FC = () => {
     activeCaller: '',
     status: 'Connecting...',
     isConnected: false,
-    error: null
+    error: null,
+    transmittingUserId: null
   });
+  
+  const [channelUsers, setChannelUsers] = useState<Array<{userId: number, callsign: string}>>([]);
+  const [audioError, setAudioError] = useState<string | null>(null);
   
   const wsRef = useRef<WebSocket | null>(null);
   const { localStream, startRecording, stopRecording, cleanup: audioCleanup } = useAudio();
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttempts = useRef(0);
+  
+  // Stable sendWebSocket function
+  const sendWebSocket = useCallback((msg: WebSocketMessage | string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    }
+  }, []);
   
   const { 
     handleOffer, 
@@ -38,58 +52,79 @@ const PTT: React.FC = () => {
     createOffer, 
     enableAudio,
     audioEnabled,
-    closeAllConnections 
+    closeAllConnections
   } = useWebRTC({ 
-    localStream: localStream, 
+    localStream, 
     currentUser: user, 
-    sendWebSocket: (msg) => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
-      }
-    }
+    sendWebSocket,
+    onAudioError: (error: string) => setAudioError(error)
   });
   
-  // WebSocket message handler with targetUserId filter
+  // WebSocket message handler
   const handleWebSocketMessage = useCallback((message: WebSocketMessage) => {
-    // Ignore messages not meant for us
-    if (message.targetUserId && user && message.targetUserId !== user.userId) {
-      console.log('[PTT] Ignoring message not for us:', message.type, 'target:', message.targetUserId, 'our userId:', user.userId);
-      return;
-    }
+    console.log('[PTT] Processing message:', message.type, 'full message:', message);
     
     switch (message.type) {
-      case 'offer':
-        if (message.payload && message.userId && message.callsign) {
-          const callsign = message.callsign;
-          handleOffer(message.userId, callsign, message.payload);
-          setState(prev => ({ ...prev, isReceiving: true, activeCaller: callsign }));
+      case 'connected':
+        // Store user list for this channel
+        if (message.users && Array.isArray(message.users)) {
+          const users = message.users as Array<{userId: number, callsign: string}>;
+          setChannelUsers(users);
+          console.log('[PTT] ✅ Received user list:', users);
+          // Also log to window for debugging
+          (window as any).channelUsers = users;
+        } else {
+          console.warn('[PTT] ⚠️ No users array in connected message or not an array');
         }
         break;
-        
+      
+      case 'offer':
+        console.log('[PTT] 🎧 Offer received - payload:', !!message.payload, 'userId:', message.userId, 'callsign:', message.callsign, 'typeof handleOffer:', typeof handleOffer);
+        if (message.payload && message.userId && message.callsign) {
+          const callsign = message.callsign;
+          console.log('[PTT] ✅ Conditions met, calling handleOffer...');
+          handleOffer(message.userId, callsign, message.payload);
+          setState(prev => ({ ...prev, isReceiving: true, activeCaller: callsign }));
+        } else {
+          console.warn('[PTT] ⚠️ Offer missing fields - payload:', !!message.payload, 'userId:', message.userId, 'callsign:', message.callsign);
+        }
+        break;
+      
       case 'answer':
         if (message.payload && message.userId) {
           handleAnswer(message.userId, message.payload);
         }
         break;
-        
+      
       case 'ice-candidate':
         if (message.payload && message.userId) {
           handleIceCandidate(message.userId, message.payload);
         }
         break;
-        
+      
       case 'ptt-start':
         if (message.callsign) {
+          // If someone else is already transmitting, ignore
+          if (state.transmittingUserId && state.transmittingUserId !== message.userId) {
+            console.warn('[PTT] ⚠️ Someone else is already transmitting');
+            return;
+          }
           const callsign = message.callsign;
-          setState(prev => ({ ...prev, isReceiving: true, activeCaller: callsign }));
+          setState(prev => ({ ...prev, isReceiving: true, activeCaller: callsign, transmittingUserId: message.userId as number }));
         }
         break;
-        
+      
       case 'ptt-stop':
-        setState(prev => ({ ...prev, isReceiving: false, activeCaller: '' }));
+        setState(prev => ({ ...prev, isReceiving: false, activeCaller: '', transmittingUserId: null }));
         break;
     }
-  }, [handleOffer, handleAnswer, handleIceCandidate, user]);
+  }, [handleOffer, handleAnswer, handleIceCandidate, state.transmittingUserId]);
+  
+  // Use ref to avoid reconnects when handler changes
+  const handleWebSocketMessageRef = useRef(handleWebSocketMessage);
+  useEffect(() => {
+    handleWebSocketMessageRef.current = handleWebSocketMessage;
+  }, [handleWebSocketMessage]);
   
   // Connect WebSocket - only once per channelId+user
   useEffect(() => {
@@ -115,13 +150,14 @@ const PTT: React.FC = () => {
     ws.onopen = () => {
       console.log('[PTT] WebSocket connected successfully');
       setState(prev => ({ ...prev, isConnected: true, status: 'Connected', error: null }));
+      reconnectAttempts.current = 0;
     };
     
     ws.onmessage = (event) => {
       try {
         const message: WebSocketMessage = JSON.parse(event.data);
         console.log('[PTT] Received:', message.type, message);
-        handleWebSocketMessage(message);
+        handleWebSocketMessageRef.current?.(message);
       } catch (err) {
         console.error('[PTT] Failed to parse message:', err);
       }
@@ -129,8 +165,20 @@ const PTT: React.FC = () => {
     
     ws.onclose = (event) => {
       console.log('[PTT] WebSocket disconnected:', event.code, event.reason);
-      setState(prev => ({ ...prev, isConnected: false, status: 'Disconnected' }));
+      setState(prev => ({ ...prev, isConnected: false, status: 'Disconnected', transmittingUserId: null }));
       closeAllConnections();
+      
+      // Attempt to reconnect after delay (exponential backoff)
+      if (!event.wasClean) {
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+        reconnectAttempts.current += 1;
+        console.log(`[PTT] Reconnecting in ${delay}ms...`);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (wsRef.current === ws) {
+            wsRef.current = null;
+          }
+        }, delay);
+      }
     };
     
     ws.onerror = (event) => {
@@ -141,12 +189,15 @@ const PTT: React.FC = () => {
     
     return () => {
       console.log('[PTT] Cleaning up WebSocket connection');
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }
       wsRef.current = null;
     };
-  }, [channelId, user?.userId, handleWebSocketMessage]);  // Only reconnect if channelId, userId, or message handler changes
+  }, [channelId, user?.userId]); // Only reconnect if channelId or userId changes
   
   // Send function for WebSocket
   const send = (message: WebSocketMessage | string) => {
@@ -158,13 +209,23 @@ const PTT: React.FC = () => {
   const isConnected = state.isConnected;
   
   const handlePTTPress = async () => {
+    // Block if someone else is transmitting (and it's not me)
+    if (state.transmittingUserId && state.transmittingUserId !== user?.userId) {
+      setState(prev => ({ ...prev, error: 'Channel is occupied by another user' }));
+      return;
+    }
+    
     if (!isConnected || state.isReceiving || !user) return;
     
     // Notify others that PTT started
     send({ type: 'ptt-start', channelId: parseInt(channelId!), callsign: user.callsign });
+    setState(prev => ({ ...prev, transmittingUserId: user.userId }));
     
-    // Create WebRTC offer for all users in channel
-    await createOffer(parseInt(channelId!), user.callsign);
+    // Create WebRTC offer for EACH user in channel
+    for (const userInChannel of channelUsers) {
+      console.log(`[PTT] Creating offer for user ${userInChannel.userId} (${userInChannel.callsign})`);
+      await createOffer(userInChannel.userId, userInChannel.callsign);
+    }
     
     startRecording();
     setState(prev => ({ ...prev, isTransmitting: true, status: 'Transmitting...' }));
@@ -174,6 +235,7 @@ const PTT: React.FC = () => {
     if (!state.isTransmitting) return;
     
     send({ type: 'ptt-stop', channelId: parseInt(channelId!) });
+    setState(prev => ({ ...prev, transmittingUserId: null }));
     stopRecording();
     setState(prev => ({ ...prev, isTransmitting: false, status: 'Transmission ended' }));
   };
@@ -211,8 +273,49 @@ const PTT: React.FC = () => {
             </div>
           )}
           
+          {/* Audio Error UI */}
+          {(audioError || !audioEnabled) && (
+            <div className="mb-4 p-4 bg-red-50 border border-red-400 rounded-md">
+              <p className="text-red-800 mb-2">⚠️ {audioError || "NO AUDIO!"}</p>
+              <p className="text-sm text-red-600">
+                {audioError || 'Audio playback is blocked. Click enable audio.'}
+              </p>
+              <button
+                onClick={() => {
+                  enableAudio();
+                  setAudioError(null);
+                }}
+                className="mt-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+              >
+                🔊 Enable Audio
+              </button>
+            </div>
+          )}
+          
+          {/* User List Badges - Above Status */}
+          <div className="mb-4 flex flex-wrap gap-2">
+            {channelUsers.map(user => (
+              <span 
+                key={user.userId}
+                className={`px-3 py-1 rounded-full text-sm ${
+                  state.transmittingUserId === user.userId 
+                    ? 'bg-red-200 text-red-800' 
+                    : 'bg-blue-100 text-blue-800'
+                }`}
+                title={user.callsign}
+              >
+                {user.callsign.length > 10 ? user.callsign.substring(0, 10) + '...' : user.callsign}
+                {state.transmittingUserId === user.userId && ' 🎤'}
+                {!audioEnabled && state.transmittingUserId === user.userId && ' 🔊'}
+              </span>
+            ))}
+            {channelUsers.length === 0 && (
+              <p className="text-gray-500 text-sm">No other users in this channel</p>
+            )}
+          </div>
+          
           {/* Audio Enable Section */}
-          {!audioEnabled && (
+          {!audioEnabled && channelUsers.length > 0 && (
             <div className="mb-4 p-4 bg-yellow-50 border border-yellow-400 rounded-md">
               <p className="text-yellow-800 mb-2">⚠️ Audio playback may be blocked by browser policy</p>
               <button
@@ -244,14 +347,15 @@ const PTT: React.FC = () => {
             <button
               className={`w-48 h-48 rounded-full text-white text-2xl font-bold
                 ${state.isTransmitting ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}
+                ${audioError ? 'opacity-50' : ''}
                 ${state.isReceiving || !state.isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
               onMouseDown={handlePTTPress}
               onMouseUp={handlePTTRelease}
               onTouchStart={handlePTTPress}
               onTouchEnd={handlePTTRelease}
-              disabled={state.isReceiving || !state.isConnected}
+              disabled={!!audioError || state.isReceiving || !state.isConnected}
             >
-              {state.isTransmitting ? 'TALKING...' : 'PTT'}
+              {audioError ? 'NO AUDIO!' : (state.isTransmitting ? 'TALKING...' : 'PTT')}
             </button>
           </div>
           
