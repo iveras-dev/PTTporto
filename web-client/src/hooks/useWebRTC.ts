@@ -119,8 +119,13 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
       console.log(`[WebRTC] 📞 Received answer from ${fromUserId}`);
       const pc = peerConnections.current.get(fromUserId);
       if (pc) {
-        await pc.connection.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log(`[WebRTC] ✅ Remote description set for ${fromUserId}`);
+        // Only set remote description if we're in the right state
+        if (pc.connection.signalingState === 'have-local-offer') {
+          await pc.connection.setRemoteDescription(new RTCSessionDescription(answer));
+          console.log(`[WebRTC] ✅ Remote description set for ${fromUserId}`);
+        } else {
+          console.warn(`[WebRTC] ⚠️ Skipping answer - signalingState is: ${pc.connection.signalingState}`);
+        }
       } else {
         console.warn(`[WebRTC] ⚠️ No peer connection found for user ${fromUserId}`);
       }
@@ -144,17 +149,29 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
   const createOffer = useCallback(async (targetUserId: number, targetCallsign: string): Promise<void> => {
     try {
       let pc = peerConnections.current.get(targetUserId);
-      if (!pc) {
+      
+      // Only create new connection if none exists or it's in a closed state
+      if (!pc || pc.connection.signalingState === 'closed' || pc.connection.iceConnectionState === 'closed') {
+        if (pc) {
+          console.log(`[WebRTC] Cleaning up old connection for ${targetCallsign}`);
+          pc.connection.close();
+        }
         pc = { userId: targetUserId, callsign: targetCallsign, connection: createPeerConnection(targetUserId, targetCallsign) };
         peerConnections.current.set(targetUserId, pc);
+      } else if (pc.connection.signalingState !== 'stable') {
+        console.log(`[WebRTC] ⚠️ Skipping offer - connection for ${targetCallsign} is in state: ${pc.connection.signalingState}`);
+        return; // Skip if already in offer/answer process
       }
       
       // Add local stream if available
       if (localStream.current) {
-        localStream.current.getTracks().forEach(track => {
-          pc!.connection.addTrack(track, localStream.current!);
-        });
-        console.log(`[WebRTC] Added local stream tracks for ${targetCallsign}`);
+        // Check if tracks are already added
+        const senders = pc.connection.getSenders();
+        const audioTrack = localStream.current.getAudioTracks()[0];
+        if (audioTrack && !senders.find(s => s.track?.id === audioTrack.id)) {
+          pc.connection.addTrack(audioTrack, localStream.current);
+          console.log(`[WebRTC] Added local stream tracks for ${targetCallsign}`);
+        }
       }
       
       const offer = await pc.connection.createOffer();
