@@ -59,44 +59,86 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
       console.log('[WebRTC] 🎧 TRACK RECEIVED from', remoteCallsign);
       const stream = event.streams[0];
       if (stream) {
-        console.log('[WebRTC] Stream has', stream.getTracks().length, 'tracks');
+        const audioTracks = stream.getAudioTracks();
+        console.log('[WebRTC] Stream has', stream.getTracks().length, 'tracks, audio tracks:', audioTracks.length);
+        
+        // Log track details
+        audioTracks.forEach((track, idx) => {
+          console.log(`[WebRTC] Audio track ${idx}:`, {
+            id: track.id,
+            enabled: track.enabled,
+            muted: track.muted,
+            readyState: track.readyState,
+            label: track.label
+          });
+        });
         
         let audioEl = document.getElementById(`audio-${remoteUserId}`) as HTMLAudioElement;
         if (!audioEl) {
           audioEl = document.createElement('audio');
           audioEl.id = `audio-${remoteUserId}`;
-          audioEl.controls = false; // Hide controls by default
+          audioEl.controls = true; // Show controls for debugging
           audioEl.autoplay = true;
           audioEl.muted = false;
+          audioEl.volume = 1.0;
           document.body.appendChild(audioEl);
-          console.log('[WebRTC] Audio element created');
+          console.log('[WebRTC] Audio element created (with controls for debugging)');
         }
         
+        // Force stop any existing playback
+        audioEl.pause();
+        audioEl.srcObject = null;
+        
+        // Set new stream
         audioEl.srcObject = stream;
-        console.log('[WebRTC] Set srcObject to remote stream');
+        audioEl.volume = 1.0;
+        audioEl.muted = false;
+        console.log('[WebRTC] Set srcObject to remote stream, volume=1, muted=false');
+        
+        // Add event listeners for debugging
+        audioEl.onplaying = () => {
+          console.log('[WebRTC] ✅ Audio PLAYING event fired!');
+        };
+        audioEl.oncanplay = () => {
+          console.log('[WebRTC] Audio can play now');
+        };
+        audioEl.onerror = (e) => {
+          console.error('[WebRTC] ❌ Audio element error:', e);
+        };
         
         // Try to play (may fail without user interaction)
         const playPromise = audioEl.play();
         if (playPromise !== undefined) {
           playPromise.then(() => {
-              console.log('[WebRTC] ✅ Audio PLAYING!');
-              // Verify audio is actually outputting
-              setTimeout(() => {
-                console.log('[WebRTC] Audio element verification:', {
-                  volume: audioEl.volume,
-                  muted: audioEl.muted,
-                  paused: audioEl.paused,
-                  readyState: audioEl.readyState
-                });
-              }, 1000);
-            }).catch(e => {
-              console.error('[WebRTC] ❌ Audio play error:', e.message);
-              // Show enable audio button in UI
-              if (audioErrorCallbackRef.current) {
-                audioErrorCallbackRef.current(`Audio blocked for ${remoteCallsign}. Click "Enable Audio" to hear them.`);
+            console.log('[WebRTC] ✅ Audio PLAYING! (promise resolved)');
+            // Verify audio is actually outputting
+            setTimeout(() => {
+              const verification = {
+                volume: audioEl.volume,
+                muted: audioEl.muted,
+                paused: audioEl.paused,
+                readyState: audioEl.readyState,
+                currentTime: audioEl.currentTime,
+                audioTracks: audioEl.srcObject ? (audioEl.srcObject as MediaStream).getAudioTracks().length : 0
+              };
+              console.log('[WebRTC] Audio element verification:', verification);
+              
+              // If still paused, try to play again
+              if (audioEl.paused) {
+                console.warn('[WebRTC] ⚠️ Audio still paused, trying to play again...');
+                audioEl.play().catch(e => console.error('[WebRTC] Retry play error:', e));
               }
-            });
+            }, 1000);
+          }).catch(e => {
+            console.error('[WebRTC] ❌ Audio play error:', e.message);
+            // Show enable audio button in UI
+            if (audioErrorCallbackRef.current) {
+              audioErrorCallbackRef.current(`Audio blocked for ${remoteCallsign}. Click "Enable Audio" to hear them.`);
+            }
+          });
         }
+      } else {
+        console.error('[WebRTC] ❌ No stream in ontrack event!');
       }
     };
     
