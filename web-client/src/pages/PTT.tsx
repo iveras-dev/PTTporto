@@ -208,7 +208,10 @@ const PTT: React.FC = () => {
   
   const isConnected = state.isConnected;
   
-  const handlePTTPress = async () => {
+  const handlePTTPress = useCallback(async () => {
+    // Guard: block if already transmitting
+    if (state.isTransmitting) return;
+    
     // Block if someone else is transmitting (and it's not me)
     if (state.transmittingUserId && state.transmittingUserId !== user?.userId) {
       setState(prev => ({ ...prev, error: 'Channel is occupied by another user' }));
@@ -239,16 +242,41 @@ const PTT: React.FC = () => {
     
     startRecording();
     setState(prev => ({ ...prev, isTransmitting: true, status: 'Transmitting...' }));
-  };
+  }, [state.isTransmitting, state.transmittingUserId, state.isReceiving, isConnected, user, channelUsers, initializeAudio, createOffer, send, startRecording, channelId, setState]);
   
-  const handlePTTRelease = () => {
+  const handlePTTRelease = useCallback(() => {
     if (!state.isTransmitting) return;
     
     send({ type: 'ptt-stop', channelId: parseInt(channelId!) });
     setState(prev => ({ ...prev, transmittingUserId: null }));
     stopRecording();
     setState(prev => ({ ...prev, isTransmitting: false, status: 'Transmission ended' }));
-  };
+  }, [state.isTransmitting, send, channelId, stopRecording, setState]);
+  
+  // Spacebar PTT support
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault(); // Prevent page scroll
+        handlePTTPress();
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handlePTTRelease();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [handlePTTPress, handlePTTRelease]);
   
   // Cleanup on unmount
   useEffect(() => {
