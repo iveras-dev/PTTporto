@@ -71,11 +71,12 @@ const PTT: React.FC = () => {
     
     switch (message.type) {
       case 'connected':
-        // Store user list for this channel
+        // Store user list for this channel (filter out current user)
         if (message.users && Array.isArray(message.users)) {
-          const users = message.users as Array<{userId: number, callsign: string}>;
+          const users = (message.users as Array<{userId: number, callsign: string}>)
+            .filter(u => u.userId !== user?.userId); // Filter out current user
           setChannelUsers(users);
-          console.log('[PTT] ✅ Received user list:', users);
+          console.log('[PTT] ✅ Received user list (filtered):', users);
           // Also log to window for debugging
           (window as any).channelUsers = users;
         } else {
