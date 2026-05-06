@@ -94,7 +94,18 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
     try {
       console.log(`[WebRTC] 📞 Received offer from ${fromCallsign} (${fromUserId})`);
       let pc = peerConnections.current.get(fromUserId);
-      if (!pc) {
+      
+      // If connection exists and is in stable state with remote description, ignore duplicate offer
+      if (pc && pc.connection.signalingState === 'stable' && pc.connection.remoteDescription) {
+        console.log(`[WebRTC] ⚠️ Ignoring duplicate offer from ${fromCallsign} - connection already stable`);
+        return;
+      }
+      
+      if (!pc || pc.connection.signalingState === 'closed') {
+        if (pc) {
+          console.log(`[WebRTC] Cleaning up closed connection for ${fromCallsign}`);
+          pc.connection.close();
+        }
         console.log(`[WebRTC] Creating new peer connection for ${fromCallsign}`);
         pc = { userId: fromUserId, callsign: fromCallsign, connection: createPeerConnection(fromUserId, fromCallsign) };
         peerConnections.current.set(fromUserId, pc);
@@ -102,10 +113,11 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
       
       console.log(`[WebRTC] Setting remote description from ${fromCallsign}`);
       await pc.connection.setRemoteDescription(new RTCSessionDescription(offer));
+      console.log(`[WebRTC] Remote description set for ${fromCallsign}`);
+      
       console.log(`[WebRTC] Creating answer for ${fromCallsign}`);
       const answer = await pc.connection.createAnswer();
       await pc.connection.setLocalDescription(answer);
-      console.log(`[WebRTC] Answer created, sending to ${fromCallsign}`);
       
       if (currentUser) {
         sendWebSocket({
@@ -202,14 +214,21 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
   }, [currentUser, sendWebSocket, createPeerConnection, localStream]);
   
   const enableAudio = useCallback(() => {
+    console.log('[WebRTC] 🔊 Enabling audio for all connections');
     setAudioEnabled(true);
     peerConnections.current.forEach((_, userId) => {
       const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
       if (audioEl) {
         audioEl.muted = false;
+        audioEl.volume = 1.0; // Max volume
         audioEl.play().then(() => {
           console.log(`[WebRTC] ✅ Audio enabled for ${userId}`);
-        }).catch(e => console.error('Play error:', e));
+        }).catch(e => {
+          console.error('[WebRTC] ❌ Play error:', e.message);
+          // Try again with user interaction
+          audioEl.controls = true;
+          audioEl.style.display = 'block';
+        });
       }
     });
   }, []);
