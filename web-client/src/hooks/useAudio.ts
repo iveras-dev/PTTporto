@@ -56,8 +56,17 @@ export const useAudio = () => {
       
       if (recorder) {
         mediaRecorder.current = recorder;
-        mediaRecorder.current.start();
-        console.log('[Audio] ✅ MediaRecorder started with:', mediaRecorder.current.mimeType);
+        // Add error handler
+        mediaRecorder.current.onerror = (event) => {
+          console.error('[Audio] ❌ MediaRecorder error:', event);
+        };
+        try {
+          mediaRecorder.current.start();
+          console.log('[Audio] ✅ MediaRecorder started with:', mediaRecorder.current.mimeType);
+        } catch (startError) {
+          console.error('[Audio] ❌ Start failed even after creation:', startError);
+          mediaRecorder.current = null;
+        }
       } else {
         console.error('[Audio] ❌ Failed to start MediaRecorder - no supported MIME type');
       }
