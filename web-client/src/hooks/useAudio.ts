@@ -35,18 +35,32 @@ export const useAudio = () => {
   
   const startRecording = useCallback(() => {
     if (localStream.current && !mediaRecorder.current) {
-      const options = {
-        mimeType: 'audio/webm;codecs=opus'
-      };
+      // Try different MIME types for compatibility
+      const mimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        ''
+      ];
       
-      try {
-        mediaRecorder.current = new MediaRecorder(localStream.current, options);
-      } catch (e) {
-        // Fallback to default codec
-        mediaRecorder.current = new MediaRecorder(localStream.current);
+      let recorder = null;
+      for (const mimeType of mimeTypes) {
+        try {
+          const options = mimeType ? { mimeType } : undefined;
+          recorder = new MediaRecorder(localStream.current!, options);
+          break;
+        } catch (e) {
+          console.warn(`[Audio] MIME type ${mimeType} not supported, trying next...`);
+        }
       }
       
-      mediaRecorder.current.start();
+      if (recorder) {
+        mediaRecorder.current = recorder;
+        mediaRecorder.current.start();
+        console.log('[Audio] ✅ MediaRecorder started with:', mediaRecorder.current.mimeType);
+      } else {
+        console.error('[Audio] ❌ Failed to start MediaRecorder - no supported MIME type');
+      }
     }
   }, []);
   
@@ -54,13 +68,6 @@ export const useAudio = () => {
     if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
       mediaRecorder.current.stop();
       mediaRecorder.current = null;
-    }
-  }, []);
-  
-  const playAudio = useCallback((stream: MediaStream) => {
-    if (audioContext.current) {
-      const source = audioContext.current.createMediaStreamSource(stream);
-      source.connect(audioContext.current.destination);
     }
   }, []);
   
@@ -88,7 +95,6 @@ export const useAudio = () => {
     initializeAudio,
     startRecording,
     stopRecording,
-    playAudio,
     cleanup
   };
 };
