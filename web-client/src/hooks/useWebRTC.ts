@@ -71,6 +71,11 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
             readyState: track.readyState,
             label: track.label
           });
+          
+          // Monitor track state changes
+          track.onmute = () => console.warn(`[WebRTC] ⚠️ Track ${idx} MUTED`);
+          track.onunmute = () => console.log(`[WebRTC] Track ${idx} unmuted`);
+          track.onended = () => console.error(`[WebRTC] ❌ Track ${idx} ENDED`);
         });
         
         let audioEl = document.getElementById(`audio-${remoteUserId}`) as HTMLAudioElement;
@@ -340,6 +345,11 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
     }
   }, []);
   
+  const getConnectionState = useCallback((userId: number) => {
+    const peer = peerConnections.current.get(userId);
+    return peer ? peer.connection.signalingState : null;
+  }, []);
+  
   // Audio error callback (set by PTT component)
   const audioErrorCallbackRef = useRef<((error: string) => void) | null>(null);
   const setAudioErrorCallback = useCallback((callback: (error: string) => void) => {
@@ -358,6 +368,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
     closeAllConnections,
     closeConnection,
     stopAllStreams,
+    getConnectionState,
     setAudioErrorCallback
   };
 };

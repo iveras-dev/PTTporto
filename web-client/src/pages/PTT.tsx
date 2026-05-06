@@ -57,7 +57,8 @@ const PTT: React.FC = () => {
     enableAudio,
     audioEnabled,
     closeAllConnections,
-    stopAllStreams
+    stopAllStreams,
+    getConnectionState
   } = useWebRTC({ 
     localStream, 
     currentUser: user, 
@@ -281,6 +282,14 @@ const PTT: React.FC = () => {
         console.log(`[PTT] ⚠️ Skipping offer for ourselves (${userInChannel.callsign})`);
         continue;
       }
+      
+          // Skip if connection already in progress
+      const connState = getConnectionState?.(userInChannel.userId);
+      if (connState && connState !== 'stable') {
+        console.log(`[PTT] ⚠️ Skipping offer for ${userInChannel.callsign} - connection in state: ${connState}`);
+        continue;
+      }
+      
       console.log(`[PTT] Creating offer for user ${userInChannel.userId} (${userInChannel.callsign})`);
       await createOffer(userInChannel.userId, userInChannel.callsign);
     }
@@ -292,7 +301,7 @@ const PTT: React.FC = () => {
     startRecording();
     setState(prev => ({ ...prev, isTransmitting: true, status: 'Transmitting...' }));
     console.log('[PTT] ✅ PTT fully started');
-  }, [state.transmittingUserId, state.isReceiving, isConnected, user, channelUsers, initializeAudio, createOffer, send, startRecording, channelId, setState]);
+  }, [state.transmittingUserId, state.isReceiving, isConnected, user, channelUsers, getConnectionState, initializeAudio, createOffer, send, startRecording, channelId, setState]);
   
   const handlePTTRelease = useCallback(() => {
     if (!isTransmittingRef.current) {
