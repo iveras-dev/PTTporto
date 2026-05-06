@@ -53,22 +53,30 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
         if (!audioEl) {
           audioEl = document.createElement('audio');
           audioEl.id = `audio-${remoteUserId}`;
-          audioEl.controls = true;
+          audioEl.controls = false; // Hide controls by default
           audioEl.autoplay = true;
+          audioEl.muted = false;
           document.body.appendChild(audioEl);
           console.log('[WebRTC] Audio element created');
         }
         
         audioEl.srcObject = stream;
+        audioEl.load(); // Force load the stream
         console.log('[WebRTC] Set srcObject to remote stream');
         
-        audioEl.play().then(() => {
-          console.log('[WebRTC] ✅ Audio PLAYING!');
-        }).catch(e => {
-          console.error('[WebRTC] ❌ Audio play error:', e.message);
-          audioEl.controls = true;
-          if (onAudioError) onAudioError(e.message);
-        });
+        // Try to play (may fail without user interaction)
+        const playPromise = audioEl.play();
+        if (playPromise !== undefined) {
+          playPromise.then(() => {
+            console.log('[WebRTC] ✅ Audio PLAYING!');
+          }).catch(e => {
+            console.error('[WebRTC] ❌ Audio play error:', e.message);
+            // Show enable audio button in UI
+            if (audioErrorCallbackRef.current) {
+              audioErrorCallbackRef.current(`Audio blocked for ${remoteCallsign}. Click "Enable Audio" to hear them.`);
+            }
+          });
+        }
       }
     };
     
@@ -198,7 +206,10 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
     peerConnections.current.forEach((_, userId) => {
       const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
       if (audioEl) {
-        audioEl.play().catch(e => console.error('Play error:', e));
+        audioEl.muted = false;
+        audioEl.play().then(() => {
+          console.log(`[WebRTC] ✅ Audio enabled for ${userId}`);
+        }).catch(e => console.error('Play error:', e));
       }
     });
   }, []);
