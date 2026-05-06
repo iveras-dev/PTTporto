@@ -40,7 +40,7 @@ const PTT: React.FC = () => {
     audioEnabled,
     closeAllConnections 
   } = useWebRTC({ 
-    localStream: localStream.current, 
+    localStream: localStream, 
     currentUser: user, 
     sendWebSocket: (msg) => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -91,9 +91,18 @@ const PTT: React.FC = () => {
     }
   }, [handleOffer, handleAnswer, handleIceCandidate, user]);
   
-  // Connect WebSocket
+  // Connect WebSocket - only once per channelId+user
   useEffect(() => {
-    if (!channelId || !user) return;
+    if (!channelId || !user) {
+      console.log('[PTT] Missing channelId or user, skipping WebSocket connect');
+      return;
+    }
+    
+    // Prevent duplicate connections
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('[PTT] WebSocket already connected, skipping');
+      return;
+    }
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.hostname === 'localhost' ? 'localhost:8082' : `${window.location.hostname}:8082`;
@@ -104,7 +113,7 @@ const PTT: React.FC = () => {
     wsRef.current = ws;
     
     ws.onopen = () => {
-      console.log('[PTT] WebSocket connected');
+      console.log('[PTT] WebSocket connected successfully');
       setState(prev => ({ ...prev, isConnected: true, status: 'Connected', error: null }));
     };
     
@@ -118,21 +127,26 @@ const PTT: React.FC = () => {
       }
     };
     
-    ws.onclose = () => {
-      console.log('[PTT] WebSocket disconnected');
+    ws.onclose = (event) => {
+      console.log('[PTT] WebSocket disconnected:', event.code, event.reason);
       setState(prev => ({ ...prev, isConnected: false, status: 'Disconnected' }));
       closeAllConnections();
     };
     
-    ws.onerror = () => {
-      setState(prev => ({ ...prev, error: 'WebSocket error occurred' }));
+    ws.onerror = (event) => {
+      console.error('[PTT] WebSocket error event:', event);
+      const errorMsg = event instanceof ErrorEvent ? event.message : 'Unknown WebSocket error';
+      setState(prev => ({ ...prev, error: `WebSocket error: ${errorMsg}. Check console (F12) for details.` }));
     };
     
     return () => {
-      ws.close();
+      console.log('[PTT] Cleaning up WebSocket connection');
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
       wsRef.current = null;
     };
-  }, [channelId, user, handleWebSocketMessage, closeAllConnections]);
+  }, [channelId, user?.userId, handleWebSocketMessage]);  // Only reconnect if channelId, userId, or message handler changes
   
   // Send function for WebSocket
   const send = (message: WebSocketMessage | string) => {

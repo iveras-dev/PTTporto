@@ -1,14 +1,14 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { WebSocketMessage, PeerConnectionState } from '../types/ptt';
 
 interface UseWebRTCOptions {
-  localStream: MediaStream | null;
+  localStream: React.RefObject<MediaStream | null>;
   currentUser: { userId: number; callsign: string } | null;
   sendWebSocket: (msg: WebSocketMessage) => void;
 }
 
 export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTCOptions) => {
-  const [peerConnections] = useState<Map<number, PeerConnectionState>>(new Map());
+  const peerConnections = useRef<Map<number, PeerConnectionState>>(new Map());
   const [audioEnabled, setAudioEnabled] = useState(false);
   
   const configuration: RTCConfiguration = {
@@ -20,10 +20,10 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   
   const createPeerConnection = (remoteUserId: number, remoteCallsign: string): RTCPeerConnection => {
     // Close existing connection if any
-    const existing = peerConnections.get(remoteUserId);
+    const existing = peerConnections.current.get(remoteUserId);
     if (existing) {
       existing.connection.close();
-      peerConnections.delete(remoteUserId);
+      peerConnections.current.delete(remoteUserId);
     }
     
     const pc = new RTCPeerConnection(configuration);
@@ -74,7 +74,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
     };
     
     // Store connection
-    peerConnections.set(remoteUserId, {
+    peerConnections.current.set(remoteUserId, {
       userId: remoteUserId,
       callsign: remoteCallsign,
       connection: pc
@@ -85,10 +85,10 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   
   const handleOffer = async (fromUserId: number, fromCallsign: string, offer: RTCSessionDescriptionInit) => {
     try {
-      let pc = peerConnections.get(fromUserId);
+      let pc = peerConnections.current.get(fromUserId);
       if (!pc) {
         pc = { userId: fromUserId, callsign: fromCallsign, connection: createPeerConnection(fromUserId, fromCallsign) };
-        peerConnections.set(fromUserId, pc);
+        peerConnections.current.set(fromUserId, pc);
       }
       
       await pc.connection.setRemoteDescription(new RTCSessionDescription(offer));
@@ -111,7 +111,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   
   const handleAnswer = async (fromUserId: number, answer: RTCSessionDescriptionInit) => {
     try {
-      const pc = peerConnections.get(fromUserId);
+      const pc = peerConnections.current.get(fromUserId);
       if (pc) {
         await pc.connection.setRemoteDescription(new RTCSessionDescription(answer));
       }
@@ -122,7 +122,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   
   const handleIceCandidate = async (fromUserId: number, candidate: RTCIceCandidateInit) => {
     try {
-      const pc = peerConnections.get(fromUserId);
+      const pc = peerConnections.current.get(fromUserId);
       if (pc && candidate) {
         await pc.connection.addIceCandidate(new RTCIceCandidate(candidate));
       }
@@ -133,16 +133,16 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   
   const createOffer = async (targetUserId: number, targetCallsign: string): Promise<void> => {
     try {
-      let pc = peerConnections.get(targetUserId);
+      let pc = peerConnections.current.get(targetUserId);
       if (!pc) {
         pc = { userId: targetUserId, callsign: targetCallsign, connection: createPeerConnection(targetUserId, targetCallsign) };
-        peerConnections.set(targetUserId, pc);
+        peerConnections.current.set(targetUserId, pc);
       }
       
       // Add local stream if available
-      if (localStream) {
-        localStream.getTracks().forEach(track => {
-          pc!.connection.addTrack(track, localStream);
+      if (localStream.current) {
+        localStream.current.getTracks().forEach(track => {
+          pc!.connection.addTrack(track, localStream.current!);
         });
       }
       
@@ -166,7 +166,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   const enableAudio = () => {
     setAudioEnabled(true);
     // Enable all existing audio elements
-     peerConnections.forEach((_, userId) => {
+     peerConnections.current.forEach((_, userId) => {
        const audioEl = document.getElementById(`audio-${userId}`) as HTMLAudioElement;
       if (audioEl) {
         audioEl.play().catch(e => console.error('Play error:', e));
@@ -175,22 +175,22 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket }: UseWebRTC
   };
   
   const closeAllConnections = () => {
-    peerConnections.forEach((peer, userId) => {
+    peerConnections.current.forEach((peer, userId) => {
       peer.connection.close();
       // Remove audio element
       const audioEl = document.getElementById(`audio-${userId}`);
       if (audioEl) audioEl.remove();
     });
-    peerConnections.clear();
+    peerConnections.current.clear();
   };
   
   const closeConnection = (userId: number) => {
-    const peer = peerConnections.get(userId);
+    const peer = peerConnections.current.get(userId);
     if (peer) {
       peer.connection.close();
       const audioEl = document.getElementById(`audio-${userId}`);
       if (audioEl) audioEl.remove();
-      peerConnections.delete(userId);
+      peerConnections.current.delete(userId);
     }
   };
   
