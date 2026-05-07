@@ -30,6 +30,7 @@ const PTT: React.FC = () => {
   });
 
   const [channelUsers, setChannelUsers] = useState<Array<{userId: number, callsign: string}>>([]);
+  const [audioEnabled, setAudioEnabled] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -39,7 +40,6 @@ const PTT: React.FC = () => {
   const handlePTTPressRef = useRef<(() => void) | null>(null);
   const handlePTTReleaseRef = useRef<(() => void) | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
-  const audioEnabledRef = useRef(false);
 
   const { startMic, startTransmitting, stopTransmitting, playAudioChunk, stopPlayback, cleanup: audioCleanup } = useAudioStream();
 
@@ -258,7 +258,7 @@ const PTT: React.FC = () => {
   }, [audioCleanup, stopPlayback]);
 
   const enableAudio = useCallback(() => {
-    audioEnabledRef.current = true;
+    setAudioEnabled(true);
     if (audioElRef.current) {
       audioElRef.current.play().catch(() => {});
     }
@@ -288,7 +288,7 @@ const PTT: React.FC = () => {
             </div>
           )}
 
-          {!audioEnabledRef.current && (
+          {!audioEnabled && (
             <div className="mb-4 p-4 bg-yellow-50 border border-yellow-400 rounded-md">
               <p className="text-yellow-800 mb-2">⚠️ NO AUDIO! Click to enable.</p>
               <button
@@ -339,13 +339,12 @@ const PTT: React.FC = () => {
             <button
               className={`w-48 h-48 rounded-full text-white text-2xl font-bold
                 ${state.isTransmitting ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}
-                ${!audioEnabledRef.current ? 'opacity-50' : ''}
                 ${state.isReceiving || !state.isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
               onMouseDown={(e) => { e.preventDefault(); handlePTTPress(); }}
               onMouseUp={(e) => { e.preventDefault(); handlePTTRelease(); }}
               onTouchStart={(e) => { e.preventDefault(); handlePTTPress(); }}
               onTouchEnd={(e) => { e.preventDefault(); handlePTTRelease(); }}
-              disabled={!audioEnabledRef.current || state.isReceiving || !state.isConnected}
+              disabled={state.isReceiving || !state.isConnected}
             >
               {state.isTransmitting ? 'TALKING...' : 'PTT'}
             </button>
