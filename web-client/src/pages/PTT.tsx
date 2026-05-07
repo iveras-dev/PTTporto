@@ -113,8 +113,12 @@ const PTT: React.FC = () => {
           console.error('[PTT] Parse error:', err);
         }
       } else if (event.data instanceof ArrayBuffer) {
+        console.log('[PTT] 📦 Binary received:', event.data.byteLength, 'bytes');
         if (audioElRef.current) {
+          console.log('[PTT] 🔊 Playing audio chunk');
           playAudioChunk(event.data, audioElRef.current);
+        } else {
+          console.warn('[PTT] ⚠️ No audio element available');
         }
       }
     };

@@ -36,9 +36,14 @@ export const useAudioStream = () => {
 
     recorder.ondataavailable = async (e) => {
       if (e.data.size > 0) {
+        console.log('[AudioStream] 📦 Data available:', e.data.size, 'bytes');
         const buffer = await e.data.arrayBuffer();
+        console.log('[AudioStream] 🚀 Sending binary:', buffer.byteLength, 'bytes');
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(buffer);
+          console.log('[AudioStream] ✅ Sent to WebSocket');
+        } else {
+          console.warn('[AudioStream] ⚠️ WebSocket not open, state:', ws.readyState);
         }
       }
     };
