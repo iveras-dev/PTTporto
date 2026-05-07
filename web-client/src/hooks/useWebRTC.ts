@@ -234,6 +234,7 @@ export const useWebRTC = ({ localStream, currentUser, sendWebSocket, onAudioErro
   }, []);
   
   const createOffer = useCallback(async (targetUserId: number, targetCallsign: string): Promise<void> => {
+    console.log(`[WebRTC] 📞 createOffer called for ${targetCallsign} (userId: ${targetUserId})`);
     try {
       let pc = peerConnections.current.get(targetUserId);
       
