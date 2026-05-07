@@ -276,6 +276,10 @@ const PTT: React.FC = () => {
     }
     
     // Create WebRTC offer for EACH user in channel (now localStream is set)
+    console.log(`[PTT] 📋 channelUsers content:`, channelUsers);
+    console.log(`[PTT] 📋 channelUsers length:`, channelUsers?.length);
+    console.log(`[PTT] 📋 current user:`, user?.userId, user?.callsign);
+    
     for (const userInChannel of channelUsers) {
       // Skip creating offer for ourselves
       if (userInChannel.userId === user?.userId) {
