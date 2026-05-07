@@ -591,14 +591,16 @@ fun main() {
                                              runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
                                          }
                                           "offer", "answer", "ice-candidate" -> {
-                                              // Broadcast signaling to ALL users in channel (except sender)
-                                              val broadcastMessage = org.json.JSONObject()
-                                              broadcastMessage.put("type", type)
-                                              broadcastMessage.put("userId", userId)
-                                              broadcastMessage.put("callsign", callsign)
-                                              broadcastMessage.put("payload", json.getJSONObject("payload"))
-                                              runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
-                                         }
+                                               // Broadcast signaling to ALL users in channel (except sender)
+                                               val broadcastMessage = org.json.JSONObject()
+                                               broadcastMessage.put("type", type)
+                                               broadcastMessage.put("userId", userId)
+                                               broadcastMessage.put("callsign", callsign)
+                                               broadcastMessage.put("payload", json.getJSONObject("payload"))
+                                               println("[WS] 📨 Received $type from $callsign (userId: $userId) for channel $channelId")
+                                               println("[WS] Broadcasting $type to channel $channelId (excluding $userId)")
+                                               runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
+                                          }
                                      }
                                  } catch (e: Exception) {
                                      println("Error parsing message: ${e.message}")
@@ -622,17 +624,18 @@ object PTTWebSocketManager {
     private val connections = mutableMapOf<String, WebSocketServerSession>()
     private val channelMembers = mutableMapOf<Int, MutableSet<String>>()
     
-    @Synchronized
-    fun addConnection(sessionId: String, session: WebSocketServerSession) {
-        connections[sessionId] = session
-        val parts = sessionId.split("-")
-        if (parts.size == 2) {
-            val channelId = parts[1].toIntOrNull()
-            if (channelId != null) {
-                channelMembers.getOrPut(channelId) { mutableSetOf() }.add(sessionId)
-            }
-        }
-    }
+     @Synchronized
+     fun addConnection(sessionId: String, session: WebSocketServerSession) {
+         connections[sessionId] = session
+         val parts = sessionId.split("-")
+         if (parts.size == 2) {
+             val channelId = parts[1].toIntOrNull()
+             if (channelId != null) {
+                 channelMembers.getOrPut(channelId) { mutableSetOf() }.add(sessionId)
+                 println("[WS] ✅ Added connection $sessionId to channel $channelId. Total in channel: ${channelMembers[channelId]?.size}")
+             }
+         }
+     }
     
     @Synchronized
     fun removeConnection(sessionId: String) {
@@ -649,15 +652,25 @@ object PTTWebSocketManager {
         }
     }
     
-    suspend fun broadcastToChannel(channelId: Int, excludeUserId: Int, message: String) {
-        val sessions = channelMembers[channelId] ?: return
-        val excludeSessionId = "$excludeUserId-$channelId"
-        sessions.forEach { sessionId ->
-            if (sessionId != excludeSessionId) {
-                connections[sessionId]?.send(Frame.Text(message))
-            }
-        }
-    }
+     suspend fun broadcastToChannel(channelId: Int, excludeUserId: Int, message: String) {
+         val sessions = channelMembers[channelId] ?: run {
+             println("[WS] ⚠️ No sessions found for channel $channelId")
+             return
+         }
+         val excludeSessionId = "$excludeUserId-$channelId"
+         println("[WS] 📢 Broadcasting to channel $channelId (excluding $excludeUserId). Sessions: ${sessions.size}")
+         sessions.forEach { sessionId ->
+             if (sessionId != excludeSessionId) {
+                 val session = connections[sessionId]
+                 if (session != null) {
+                     println("[WS] ✅ Sending to $sessionId")
+                     session.send(Frame.Text(message))
+                 } else {
+                     println("[WS] ⚠️ Session $sessionId not found in connections!")
+                 }
+             }
+         }
+     }
     
     suspend fun sendToUser(targetUserId: Int, channelId: Int, message: String) {
         val sessionId = "$targetUserId-$channelId"
