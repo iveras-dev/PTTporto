@@ -61,12 +61,31 @@ cd /Users/gast/Downloads/PTTPorto/web-client
 nohup npm run dev -- --host 0.0.0.0 > /tmp/pttporto_webclient.log 2>&1 &
 FRONTEND_PID=$!
 echo "Frontend PID: $FRONTEND_PID"
-sleep 10
+sleep 15
 
-# Get frontend port
-FRONTEND_PORT=$(lsof -ti:3000 2>/dev/null | head -1 | xargs lsof -p | grep LISTEN | grep -o "TCP .*:300[0-9]" | head -1 | grep -o "300[0-9]" || echo "3000")
+# Get frontend port (try multiple ports)
+FRONTEND_PORT=""
+for port in 3000 3001 3002 3003 3004; do
+    if lsof -ti:$port >/dev/null 2>&1; then
+        FRONTEND_PORT=$port
+        break
+    fi
+done
+
 if [ -z "$FRONTEND_PORT" ]; then
-    FRONTEND_PORT=3002
+    echo "✗ Frontend failed to start - no port found"
+    tail -20 /tmp/pttporto_webclient.log
+    exit 1
+fi
+
+# Check frontend
+if curl -s http://localhost:$FRONTEND_PORT | grep -q "Channels\|PTT"; then
+    echo "✓ Frontend running on http://localhost:$FRONTEND_PORT"
+    echo "✓ LAN access: http://192.168.2.10:$FRONTEND_PORT"
+else
+    echo "✗ Frontend failed to start"
+    tail -20 /tmp/pttporto_webclient.log
+    exit 1
 fi
 
 # Check frontend

@@ -590,25 +590,19 @@ fun main() {
                                              broadcastMessage.put("channelId", channelId)
                                              runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
                                          }
-                                          "offer", "answer", "ice-candidate" -> {
-                                               // Broadcast signaling to ALL users in channel (except sender)
-                                               val broadcastMessage = org.json.JSONObject()
-                                               broadcastMessage.put("type", type)
-                                               broadcastMessage.put("userId", userId)
-                                               broadcastMessage.put("callsign", callsign)
-                                               broadcastMessage.put("payload", json.getJSONObject("payload"))
-                                               println("[WS] 📨 Received $type from $callsign (userId: $userId) for channel $channelId")
-                                               println("[WS] Broadcasting $type to channel $channelId (excluding $userId)")
-                                               runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, broadcastMessage.toString()) }
-                                          }
-                                     }
-                                 } catch (e: Exception) {
-                                     println("Error parsing message: ${e.message}")
-                                 }
-                             }
-                             else -> {}
-                         }
-                     }
+                                      }
+                                  } catch (e: Exception) {
+                                      println("[WS] Error parsing text message: ${e.message}")
+                                  }
+                              }
+                              is Frame.Binary -> {
+                                  val data = frame.readBytes()
+                                  println("[WS] 📨 Audio data received from $callsign (userId: $userId) - ${data.size} bytes")
+                                  runBlocking { PTTWebSocketManager.broadcastToChannel(channelId, userId, data) }
+                              }
+                              else -> {}
+                          }
+                      }
                  } catch (e: Exception) {
                      println("WebSocket error for $sessionId: ${e.message}")
                  } finally {
@@ -663,11 +657,21 @@ object PTTWebSocketManager {
              if (sessionId != excludeSessionId) {
                  val session = connections[sessionId]
                  if (session != null) {
-                     println("[WS] ✅ Sending to $sessionId")
+                     println("[WS] ✅ Sending text to $sessionId")
                      session.send(Frame.Text(message))
                  } else {
                      println("[WS] ⚠️ Session $sessionId not found in connections!")
                  }
+             }
+         }
+     }
+     
+     suspend fun broadcastToChannel(channelId: Int, excludeUserId: Int, data: ByteArray) {
+         val sessions = channelMembers[channelId] ?: return
+         val excludeSessionId = "$excludeUserId-$channelId"
+         sessions.forEach { sessionId ->
+             if (sessionId != excludeSessionId) {
+                 connections[sessionId]?.send(Frame.Binary(true, data))
              }
          }
      }
